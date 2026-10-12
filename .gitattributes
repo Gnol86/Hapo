@@ -1,0 +1,2 @@
+# Lit's bundled regular expressions contain significant whitespace in template literals.
+custom_components/hapo/frontend/hapo-panel.js whitespace=-blank-at-eol

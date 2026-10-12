@@ -1,0 +1,148 @@
+{
+  "title": "Hapo",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Hapo",
+        "description": "Configure Hapo pour calculer la présence par pièce, le sommeil des résidents et le mode de la maison. Les capteurs et les règles se configurent dans le panneau Hapo."
+      }
+    },
+    "abort": {
+      "already_configured": "Hapo est déjà configuré.",
+      "single_instance_allowed": "Hapo est déjà configuré."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "presence": {
+        "name": "Présence"
+      },
+      "sleeping": {
+        "name": "Sommeil"
+      }
+    },
+    "sensor": {
+      "mode": {
+        "name": "Mode maison"
+      },
+      "present_count": {
+        "name": "Résidents présents"
+      },
+      "awake_count": {
+        "name": "Résidents éveillés"
+      },
+      "sleeping_count": {
+        "name": "Résidents endormis"
+      }
+    },
+    "switch": {
+      "guests": {
+        "name": "Invités"
+      }
+    },
+    "select": {
+      "room_override": {
+        "name": "Forçage de présence",
+        "state": {
+          "auto": "Automatique",
+          "occupied": "Forcer présent",
+          "clear": "Forcer absent"
+        }
+      },
+      "home_override": {
+        "name": "Forçage du mode maison",
+        "state": {
+          "auto": "Automatique"
+        }
+      },
+      "sleep": {
+        "name": "Commande de sommeil",
+        "state": {
+          "auto": "Automatique",
+          "awake": "Éveillé",
+          "sleeping": "Endormi"
+        }
+      }
+    },
+    "button": {
+      "resume": {
+        "name": "Reprendre automatiquement"
+      }
+    }
+  },
+  "selector": {
+    "room_override": {
+      "options": {
+        "auto": "Automatique",
+        "occupied": "Forcer présent",
+        "clear": "Forcer absent"
+      }
+    },
+    "sleep": {
+      "options": {
+        "auto": "Automatique",
+        "awake": "Éveillé",
+        "sleeping": "Endormi",
+        "toggle": "Inverser le sommeil"
+      }
+    }
+  },
+  "services": {
+    "room_override": {
+      "name": "Forcer la présence d’une pièce",
+      "description": "Force une pièce présente ou absente, ou reprend le calcul automatique.",
+      "fields": {
+        "value": {
+          "name": "Valeur",
+          "description": "L’état souhaité ou la clé stable du mode."
+        },
+        "target_id": {
+          "name": "Identifiant Hapo",
+          "description": "Identifiant stable de pièce ou de résident affiché dans Hapo, pas un identifiant d’entité."
+        },
+        "duration": {
+          "name": "Durée",
+          "description": "Durée du forçage en secondes. Zéro conserve le forçage jusqu’à la reprise automatique."
+        }
+      }
+    },
+    "home_override": {
+      "name": "Forcer le mode maison",
+      "description": "Choisit une clé stable de mode maison, ou auto pour reprendre les règles. Les faits de présence restent calculés.",
+      "fields": {
+        "value": {
+          "name": "Valeur",
+          "description": "L’état souhaité ou la clé stable du mode."
+        },
+        "duration": {
+          "name": "Durée",
+          "description": "Durée du forçage en secondes. Zéro conserve le forçage jusqu’à la reprise automatique."
+        }
+      }
+    },
+    "sleep": {
+      "name": "Commander le sommeil d’un résident",
+      "description": "Déclare un résident endormi ou éveillé, ou libère le contrôle manuel. Un départ confirmé efface le sommeil manuel.",
+      "fields": {
+        "value": {
+          "name": "Valeur",
+          "description": "L’état souhaité ou la clé stable du mode."
+        },
+        "target_id": {
+          "name": "Identifiant Hapo",
+          "description": "Identifiant stable de pièce ou de résident affiché dans Hapo, pas un identifiant d’entité."
+        }
+      }
+    },
+    "guests": {
+      "name": "Déclarer des invités",
+      "description": "Déclare des invités présents même si tous les résidents suivis sont absents.",
+      "fields": {
+        "value": {
+          "name": "Valeur",
+          "description": "L’état souhaité ou la clé stable du mode."
+        }
+      }
+    }
+  }
+}

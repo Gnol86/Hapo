@@ -1,0 +1,55 @@
+room_override:
+  fields:
+    target_id:
+      required: true
+      example: office
+      selector:
+        text:
+    value:
+      required: true
+      selector:
+        select:
+          options: [auto, occupied, clear]
+          translation_key: room_override
+    duration:
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 604800
+          unit_of_measurement: s
+          mode: box
+home_override:
+  fields:
+    value:
+      required: true
+      example: auto
+      selector:
+        text:
+    duration:
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 604800
+          unit_of_measurement: s
+          mode: box
+sleep:
+  fields:
+    target_id:
+      required: true
+      example: resident
+      selector:
+        text:
+    value:
+      required: true
+      selector:
+        select:
+          options: [auto, awake, sleeping, toggle]
+          translation_key: sleep
+guests:
+  fields:
+    value:
+      required: true
+      selector:
+        boolean:

@@ -1,0 +1,148 @@
+{
+  "title": "Hapo",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Hapo",
+        "description": "Set up Hapo to calculate room presence, resident sleep and home modes. Configure sources and rules in the Hapo sidebar panel."
+      }
+    },
+    "abort": {
+      "already_configured": "Hapo is already configured.",
+      "single_instance_allowed": "Hapo is already configured."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "presence": {
+        "name": "Presence"
+      },
+      "sleeping": {
+        "name": "Sleeping"
+      }
+    },
+    "sensor": {
+      "mode": {
+        "name": "Home mode"
+      },
+      "present_count": {
+        "name": "Residents present"
+      },
+      "awake_count": {
+        "name": "Residents awake"
+      },
+      "sleeping_count": {
+        "name": "Residents asleep"
+      }
+    },
+    "switch": {
+      "guests": {
+        "name": "Guests"
+      }
+    },
+    "select": {
+      "room_override": {
+        "name": "Presence override",
+        "state": {
+          "auto": "Automatic",
+          "occupied": "Force occupied",
+          "clear": "Force clear"
+        }
+      },
+      "home_override": {
+        "name": "Home mode override",
+        "state": {
+          "auto": "Automatic"
+        }
+      },
+      "sleep": {
+        "name": "Sleep command",
+        "state": {
+          "auto": "Automatic",
+          "awake": "Awake",
+          "sleeping": "Asleep"
+        }
+      }
+    },
+    "button": {
+      "resume": {
+        "name": "Resume automatically"
+      }
+    }
+  },
+  "selector": {
+    "room_override": {
+      "options": {
+        "auto": "Automatic",
+        "occupied": "Force occupied",
+        "clear": "Force clear"
+      }
+    },
+    "sleep": {
+      "options": {
+        "auto": "Automatic",
+        "awake": "Awake",
+        "sleeping": "Asleep",
+        "toggle": "Toggle sleep"
+      }
+    }
+  },
+  "services": {
+    "room_override": {
+      "name": "Set room presence override",
+      "description": "Force a room occupied or clear, or resume automatic calculation.",
+      "fields": {
+        "value": {
+          "name": "Value",
+          "description": "The requested state or stable mode key."
+        },
+        "target_id": {
+          "name": "Hapo identifier",
+          "description": "Stable room or resident ID displayed in the Hapo panel, not an entity ID."
+        },
+        "duration": {
+          "name": "Duration",
+          "description": "Override duration in seconds. Zero keeps the override until you resume automatic operation."
+        }
+      }
+    },
+    "home_override": {
+      "name": "Set home mode override",
+      "description": "Choose a stable home mode key, or auto to resume rules. This does not change presence facts.",
+      "fields": {
+        "value": {
+          "name": "Value",
+          "description": "The requested state or stable mode key."
+        },
+        "duration": {
+          "name": "Duration",
+          "description": "Override duration in seconds. Zero keeps the override until you resume automatic operation."
+        }
+      }
+    },
+    "sleep": {
+      "name": "Set resident sleep",
+      "description": "Put a resident to sleep, wake them up, or release manual control. A confirmed departure clears manual sleep.",
+      "fields": {
+        "value": {
+          "name": "Value",
+          "description": "The requested state or stable mode key."
+        },
+        "target_id": {
+          "name": "Hapo identifier",
+          "description": "Stable room or resident ID displayed in the Hapo panel, not an entity ID."
+        }
+      }
+    },
+    "guests": {
+      "name": "Set guest presence",
+      "description": "Declare guests present even when all tracked residents are away.",
+      "fields": {
+        "value": {
+          "name": "Value",
+          "description": "The requested state or stable mode key."
+        }
+      }
+    }
+  }
+}
