@@ -12,6 +12,7 @@ def async_describe_events(hass, async_describe_event):
         return {
             "name": "Hapo",
             "message": event.data["message"],
+            "entity_id": event.data["entity_id"],
             "context_id": event.context_id,
         }
 

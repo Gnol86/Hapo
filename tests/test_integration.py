@@ -166,19 +166,41 @@ async def test_permissions_and_redacted_diagnostics(
 async def test_native_activity_has_entity_and_causal_context(hass, integration):
     await configure(hass, integration)
     events = []
-    remove = hass.bus.async_listen("logbook_entry", events.append)
+    remove = hass.bus.async_listen("hapo_decision", events.append)
+    duplicates = []
+    remove_duplicates = hass.bus.async_listen("logbook_entry", duplicates.append)
     from homeassistant.core import Context
 
     cause = Context()
     hass.states.async_set("binary_sensor.motion", "off", context=cause)
     await hass.async_block_till_done()
     remove()
+    remove_duplicates()
+    assert not duplicates
     assert any(
         e.data.get("entity_id") == "binary_sensor.hapo_office_presence"
         and e.context.parent_id == cause.id
         and "absence" in e.data["message"]
         for e in events
     )
+    from types import SimpleNamespace
+
+    from custom_components.hapo.logbook import async_describe_events
+
+    descriptions = {}
+    async_describe_events(
+        hass, lambda domain, kind, describe: descriptions.update({kind: describe})
+    )
+    event = next(
+        e
+        for e in events
+        if e.data.get("entity_id") == "binary_sensor.hapo_office_presence"
+    )
+    described = descriptions["hapo_decision"](
+        SimpleNamespace(data=event.data, context_id=event.context.id)
+    )
+    assert described["entity_id"] == "binary_sensor.hapo_office_presence"
+    assert described["context_id"] == event.context.id
 
 
 async def test_single_instance_config_flow(hass, integration):

@@ -1,6 +1,5 @@
 """Native activity for actual Hapo state changes, with causal context."""
 
-from homeassistant.const import EVENT_LOGBOOK_ENTRY
 from homeassistant.core import Context, HomeAssistant, callback
 
 from .const import EVENT_DECISION
@@ -65,10 +64,5 @@ def record(
     hass.bus.async_fire(
         EVENT_DECISION,
         {"name": "Hapo", "message": message, "entity_id": entity_id, "reason": reason},
-        context=context,
-    )
-    hass.bus.async_fire(
-        EVENT_LOGBOOK_ENTRY,
-        {"name": "Hapo", "message": message, "entity_id": entity_id},
         context=context,
     )
