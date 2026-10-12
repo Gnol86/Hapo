@@ -6,7 +6,7 @@ from typing import Any
 
 from homeassistant.auth.permissions.const import POLICY_CONTROL, POLICY_READ
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
-from homeassistant.core import Context, HomeAssistant, callback
+from homeassistant.core import Context, CoreState, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, Unauthorized
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import entity_registry as er
@@ -40,6 +40,7 @@ class HapoManager:
         self.unlisten = self.timer = None
         self.lock = asyncio.Lock()
         self.stopped = False
+        self.ready = hass.state is CoreState.running
         self.loaded = False
         self.context = Context()
         self._last_store = None
@@ -61,17 +62,22 @@ class HapoManager:
                 er.EVENT_ENTITY_REGISTRY_UPDATED, self._registry_changed
             )
         )
-        if not self.hass.is_running:
+        if not self.ready:
             self.removers.append(
                 self.hass.bus.async_listen_once(
-                    EVENT_HOMEASSISTANT_STARTED, self._changed
+                    EVENT_HOMEASSISTANT_STARTED, self._started
                 )
             )
         self.loaded = True
         # Source integrations may load after Hapo. Do not cancel restored
         # deadlines merely because their entities do not exist yet at startup.
-        if self.hass.is_running:
+        if self.ready:
             self.recompute()
+
+    @callback
+    def _started(self, event) -> None:
+        self.ready = True
+        self._changed(event)
 
     @callback
     def _registry_changed(self, event) -> None:
@@ -113,7 +119,7 @@ class HapoManager:
 
     @callback
     def recompute(self, context: Context | None = None) -> None:
-        if self.stopped:
+        if self.stopped or not self.ready:
             return
         self.context = context or Context()
         previous = self.engine.snapshot

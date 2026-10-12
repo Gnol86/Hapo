@@ -69,7 +69,9 @@ class RoomEngine:
         self.previous_doors = None
         self.anticipation_until = None
         self.entry_since = None
-        self.reconfirm = bool((stored or {}).get("latched"))
+        self.reconfirm = bool(
+            (stored or {}).get("latched") or (stored or {}).get("reconfirm")
+        )
         self.override = (stored or {}).get("override")
 
     def evaluate(
@@ -232,6 +234,7 @@ class RoomEngine:
         return self.stable.dump() | {
             "override": deepcopy(self.override),
             "latched": self.latched,
+            "reconfirm": self.reconfirm,
         }
 
 

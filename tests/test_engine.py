@@ -98,6 +98,9 @@ def test_bee_restart_requires_reconfirmation():
     restored = RoomEngine(config, r.dump())
     value = tick(restored, 10, motion="off", door="off")
     assert value["occupied"] is True and value["degraded"] and not value["latched"]
+    restored = RoomEngine(config, restored.dump())
+    value = tick(restored, 20, motion="off", door="off")
+    assert value["occupied"] is True and value["degraded"]
     assert tick(restored, 310, motion="off", door="off")["occupied"] is None
     assert tick(restored, 311, motion="on", door="off")["latched"]
 

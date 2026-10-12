@@ -1,6 +1,7 @@
 """Real HA entities, services, saved configuration and authenticated API."""
 
 import pytest
+from homeassistant.core import CoreState
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -9,6 +10,7 @@ from custom_components.hapo.models import default_config, default_resident, defa
 
 @pytest.fixture
 async def integration(hass):
+    hass.set_state(CoreState.running)
     entry = MockConfigEntry(domain="hapo", unique_id="hapo", title="Hapo", data={})
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -42,6 +44,7 @@ async def configure(hass, entry):
 async def test_entities_commands_and_reload(hass, integration):
     await configure(hass, integration)
     assert hass.states.get("binary_sensor.hapo_office_presence").state == "on"
+
     assert hass.states.get("sensor.hapo_home_mode").state == "active"
     await hass.services.async_call(
         "hapo", "sleep", {"target_id": "alice", "value": "sleeping"}, blocking=True
@@ -61,6 +64,38 @@ async def test_entities_commands_and_reload(hass, integration):
         "button", "press", {"entity_id": "button.hapo_office_resume"}, blocking=True
     )
     assert hass.states.get("binary_sensor.hapo_office_presence").state == "on"
+
+
+async def test_startup_source_events_do_not_reset_persisted_absence_deadline(
+    hass, integration
+):
+    await configure(hass, integration)
+    manager = integration.runtime_data
+    from copy import deepcopy
+
+    config = deepcopy(manager.config)
+    config["rooms"]["office"]["off_delay"] = 60
+    await manager.async_save(config, manager.revision)
+    hass.states.async_set("binary_sensor.motion", "off")
+    await hass.async_block_till_done()
+    since = manager.engine.rooms["office"].stable.candidate_since
+    assert since is not None
+    hass.set_state(CoreState.starting)
+    await hass.config_entries.async_reload(integration.entry_id)
+    await hass.async_block_till_done()
+    manager = integration.runtime_data
+    hass.states.async_set("binary_sensor.motion", "unavailable")
+    await hass.async_block_till_done()
+    hass.states.async_set("binary_sensor.motion", "off")
+    await hass.async_block_till_done()
+    assert not manager.ready
+    assert manager.engine.rooms["office"].stable.candidate_since == since
+    hass.set_state(CoreState.running)
+    hass.bus.async_fire("homeassistant_started")
+    await hass.async_block_till_done()
+    assert manager.ready
+    assert manager.engine.snapshot["rooms"]["office"]["occupied"] is True
+    assert manager.engine.rooms["office"].stable.deadline == since + 60
 
 
 async def test_api_revision_conflict(hass, integration, hass_ws_client):
