@@ -423,7 +423,10 @@ class HapoManager:
                 key: self.name("resident", key) for key in self.config["residents"]
             },
             "modes": {
-                m["id"]: self.mode_name(m["id"]) for m in self.config["home"]["modes"]
+                # Default labels follow the viewer's language in the panel;
+                # explicit names are kept verbatim, including for read-only users.
+                m["id"]: m["name"]
+                for m in self.config["home"]["modes"]
             },
         }
         if not user.is_admin:

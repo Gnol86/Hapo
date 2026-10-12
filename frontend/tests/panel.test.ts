@@ -10,7 +10,7 @@ for (const key of ['window', 'document', 'customElements', 'HTMLElement', 'HTMLD
 }
 const { HapoPanel } = await import('../src/hapo-panel');
 type Panel = InstanceType<typeof HapoPanel>;
-const fixture = (): Snapshot => ({ revision: 4, admin: true, names: { rooms: { office: 'My Office' }, residents: {} },
+const fixture = (): Snapshot => ({ revision: 4, admin: true, names: { rooms: { office: 'My Office' }, residents: {}, modes: { active: '' } },
   config: { version: 1, failure_grace: 300, rooms: { office: { ...room('office','office'), name: 'My Office', entry: stateCondition('binary_sensor.motion') } }, residents: {}, home: { source: 'residents', entity: null, rooms: [], modes: [{ id: 'active', name: '', condition: { type: 'fact', key: 'occupied', value: true } }] } },
   runtime: { home: { mode: 'active', occupied: true, guests: false }, residents: {}, rooms: { office: { occupied: true, reason: 'presence_source', degraded: false, pending: false, latched: false, evidence: ['binary_sensor.motion'], next_deadline: null, override: null } }, next_deadline: null },
   catalog: { areas: [{ area_id: 'office', name: 'Office' }], entities: [{ entity_id: 'binary_sensor.motion', name: 'Mouvement', state: 'on', device_class: 'motion', area_id: 'office' }, { entity_id: 'binary_sensor.door', name: 'Porte', state: 'off', device_class: 'door', area_id: 'office' }] },
@@ -31,6 +31,7 @@ afterEach(()=>{document.body.replaceChildren();});
 
 test('localized panel preserves custom names and drafts across live updates and tabs',async()=>{
   const {p,emit}=await mount(); assert.match(p.shadowRoot!.textContent!,/Vue d’ensemble/); assert.match(p.shadowRoot!.textContent!,/My Office/);
+  assert.equal(p.shadowRoot!.querySelector('.home-mode')!.textContent,'Vie');
   button(p,'My Office').click(); await settle(p); enter(namedInput(p,'Nom'),'Bureau personnel'); await settle(p);
   const live=fixture(); live.runtime.rooms.office.occupied=false; emit(live); await settle(p);
   assert.equal(p.draft!.rooms.office.name,'Bureau personnel');
@@ -55,7 +56,8 @@ test('server save rejection retains editable work',async()=>{
 });
 test('read-only users do not receive configuration tabs and disconnect releases subscription',async()=>{
   const data=fixture(); data.admin=false; delete data.config; delete data.catalog;
-  const {p,unsubscribed}=await mount(data); assert.equal(p.shadowRoot!.querySelectorAll('nav button').length,1); p.remove(); assert.equal(unsubscribed(),1);
+  data.names.modes={active:'My custom mode'};
+  const {p,unsubscribed}=await mount(data); assert.equal(p.shadowRoot!.querySelectorAll('nav button').length,1); assert.equal(p.shadowRoot!.querySelector('.home-mode')!.textContent,'My custom mode'); p.remove(); assert.equal(unsubscribed(),1);
 });
 test('negative delay is blocked before saving',async()=>{
   const {p,calls}=await mount(); button(p,'My Office').click(); await settle(p); enter(namedInput(p,'Nom'),'Draft'); await settle(p);
