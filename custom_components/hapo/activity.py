@@ -7,6 +7,10 @@ from .const import EVENT_DECISION
 REASONS = {
     "presence_source": ("presence detected", "présence détectée"),
     "no_activity": ("absence confirmed", "absence confirmée"),
+    "unconfirmed_presence": (
+        "no confirmed presence; treated as clear",
+        "présence non confirmée, zone considérée vide",
+    ),
     "holding_source": ("maintained by a sensor", "maintenue par un capteur"),
     "closed_box": (
         "presence retained behind closed doors",

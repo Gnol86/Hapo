@@ -98,6 +98,73 @@ async def test_startup_source_events_do_not_reset_persisted_absence_deadline(
     assert manager.engine.rooms["office"].stable.deadline == since + 60
 
 
+async def test_bee_restart_clears_on_timer_then_new_motion_restores_presence(
+    hass, integration, freezer
+):
+    from copy import deepcopy
+    from datetime import timedelta
+
+    from homeassistant.util import dt as dt_util
+    from pytest_homeassistant_custom_component.common import async_fire_time_changed
+
+    async def advance(seconds):
+        freezer.tick(timedelta(seconds=seconds))
+        async_fire_time_changed(hass, dt_util.utcnow())
+        await hass.async_block_till_done()
+
+    await configure(hass, integration)
+    manager = integration.runtime_data
+    config = deepcopy(manager.config)
+    config["rooms"]["office"].update(
+        profile="bee",
+        doors=[{"type": "state", "entity_id": "binary_sensor.door", "states": ["on"]}],
+        close_delay=20,
+    )
+    hass.states.async_set("binary_sensor.door", "off")
+    await manager.async_save(config, manager.revision)
+    await advance(20)
+    assert manager.engine.snapshot["rooms"]["office"]["latched"]
+    hass.states.async_set("binary_sensor.motion", "off")
+    await hass.async_block_till_done()
+
+    hass.set_state(CoreState.starting)
+    await hass.config_entries.async_reload(integration.entry_id)
+    await hass.async_block_till_done()
+    manager = integration.runtime_data
+    hass.states.async_set("binary_sensor.motion", "on")
+    await hass.async_block_till_done()
+    assert not manager.ready
+    hass.set_state(CoreState.running)
+    hass.bus.async_fire("homeassistant_started")
+    await hass.async_block_till_done()
+    assert not manager.engine.snapshot["rooms"]["office"]["latched"]
+    await advance(4)
+    hass.states.async_set("binary_sensor.motion", "off")
+    await hass.async_block_till_done()
+    assert hass.states.get("binary_sensor.hapo_office_presence").state == "on"
+
+    # No more source events: the scheduled deadline must resolve the room.
+    await advance(16)
+    state = hass.states.get("binary_sensor.hapo_office_presence")
+    assert state.state == "off"
+    assert state.attributes["reason"] == "unconfirmed_presence"
+    assert not state.attributes["degraded"]
+    await hass.services.async_call(
+        "hapo",
+        "room_override",
+        {"target_id": "office", "value": "clear"},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        "button", "press", {"entity_id": "button.hapo_office_resume"}, blocking=True
+    )
+    assert hass.states.get("binary_sensor.hapo_office_presence").state == "off"
+    hass.states.async_set("binary_sensor.motion", "on")
+    await hass.async_block_till_done()
+    assert hass.states.get("binary_sensor.hapo_office_presence").state == "on"
+    assert manager.engine.snapshot["rooms"]["office"]["latched"]
+
+
 async def test_api_revision_conflict(hass, integration, hass_ws_client):
     client = await hass_ws_client(hass)
     await client.send_json_auto_id({"type": "hapo/get"})

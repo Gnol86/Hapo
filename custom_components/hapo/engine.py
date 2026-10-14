@@ -63,15 +63,14 @@ class RoomEngine:
         self.config = config
         self.stable = StableValue(stored)
         self.conditions = Conditions()
+        # Door continuity cannot be verified across a reload. Resume normal
+        # source evaluation; do not restore a latch or a legacy reconfirm wait.
         self.latched = False
         self.latched_at = None
         self.closed_since = None
         self.previous_doors = None
         self.anticipation_until = None
         self.entry_since = None
-        self.reconfirm = bool(
-            (stored or {}).get("latched") or (stored or {}).get("reconfirm")
-        )
         self.override = (stored or {}).get("override")
 
     def evaluate(
@@ -143,8 +142,6 @@ class RoomEngine:
                 desired = entry
         if profile == "bee":
             if doors is not False:
-                if doors is None and self.latched:
-                    self.reconfirm = True
                 self.latched = False
                 self.latched_at = self.closed_since = None
                 if doors is None and entry is not True:
@@ -163,7 +160,6 @@ class RoomEngine:
                     if not self.latched:
                         self.latched_at = now
                     self.latched = True
-                    self.reconfirm = False
                 if self.latched and c["latch_max"]:
                     expiry = self.latched_at + c["latch_max"]
                     if now >= expiry:
@@ -173,10 +169,8 @@ class RoomEngine:
                         deadlines.append(expiry)
                 if self.latched:
                     desired, reason = True, "closed_box"
-                if self.reconfirm and entry is not True:
-                    desired, reason = None, "reconfirmation_required"
-            if doors is True:
-                self.reconfirm = False
+                elif entry is False and now >= settle:
+                    reason = "unconfirmed_presence"
         if c["keep_open"] and doors is True:
             desired, reason = True, "door_open"
         elif self.anticipation_until is not None and desired is not True:
@@ -216,7 +210,7 @@ class RoomEngine:
             deadlines.append(self.stable.deadline)
         deadlines += self.conditions.deadlines
         if self.stable.degraded and c["enabled"]:
-            reason = "reconfirmation_required" if self.reconfirm else "missing_source"
+            reason = "missing_source"
         elif self.stable.pending:
             reason = "confirming_presence" if desired else "absence_countdown"
         return {
@@ -234,7 +228,6 @@ class RoomEngine:
         return self.stable.dump() | {
             "override": deepcopy(self.override),
             "latched": self.latched,
-            "reconfirm": self.reconfirm,
         }
 
 

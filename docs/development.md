@@ -9,6 +9,8 @@
 
 The tests cover profiles, retriggers, multiple doors, stillness, late detections, closure stabilization, open-door behavior, maximum latch duration, short unconfirmed motion, hold-only sources, timeouts, numeric hysteresis, unknown inputs, resident confirmations, named zones, sleep overrides, guest exceptions, custom mode priority, cycles, deadlines after restart, entity lifecycle, commands, permissions, revision conflicts, native activity and redacted diagnostics. Panel tests exercise draft retention, explicit suggestion selection, validation, concurrent saves, localization and subscription cleanup.
 
+Bee regression scenarios cover a startup motion pulse ending during stabilization, clearing without further state events, late motion reactivating the room, old persisted reconfirmation flags, manual resume, and recovery from brief or prolonged door outages. Missing live sources still exercise the three-valued failure policy.
+
 Pure engine replay is useful for historical comparisons. Evaluate every scheduled deadline before the next recorded state event, and inject manual sleep actions separately from location state changes. Recorder history alone cannot prove unrecorded sensor continuity.
 
 For manual verification, use a separate Home Assistant configuration directory, bind HTTP to localhost, install this component and configure simulated input entities. Test actual configuration flows, websocket saves, services, generated entities and the native sidebar panel. Verify narrow/wide layouts and both themes. Household installation and physical behavior remain a separate validation stage.

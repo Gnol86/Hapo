@@ -85,24 +85,76 @@ def test_bee_short_exit_clears_after_stabilization():
     assert tick(r, 21, motion="off", door="off")["occupied"] is False
 
 
-def test_bee_restart_requires_reconfirmation():
+@pytest.mark.parametrize("off_delay", [0, 30])
+def test_bee_restart_clears_unconfirmed_presence_and_accepts_late_motion(off_delay):
     config = default_room("office") | {
         "profile": "bee",
         "entry": source(),
         "doors": [source("binary_sensor.door")],
-        "close_delay": 0,
-        "off_delay": 0,
+        "close_delay": 20,
+        "off_delay": off_delay,
     }
     r = RoomEngine(config)
-    assert tick(r, motion="on", door="off")["latched"]
+    tick(r, motion="on", door="off")
+    assert tick(r, 20, motion="on", door="off")["latched"]
     restored = RoomEngine(config, r.dump())
-    value = tick(restored, 10, motion="off", door="off")
-    assert value["occupied"] is True and value["degraded"] and not value["latched"]
+    # Like the garden incident, motion ends before startup stabilization finishes.
+    value = tick(restored, 100, motion="on", door="off")
+    assert value["occupied"] is True and not value["latched"]
+    value = tick(restored, 104, motion="off", door="off")
+    assert value["occupied"] is True and not value["degraded"]
+    assert value["next_deadline"] == 120
+    tick(restored, 120, motion="off", door="off")
+    value = tick(restored, 120 + off_delay, motion="off", door="off")
+    assert value["occupied"] is False and not value["degraded"]
+    assert value["reason"] == "unconfirmed_presence"
+    assert value["next_deadline"] is None
     restored = RoomEngine(config, restored.dump())
-    value = tick(restored, 20, motion="off", door="off")
-    assert value["occupied"] is True and value["degraded"]
-    assert tick(restored, 310, motion="off", door="off")["occupied"] is None
-    assert tick(restored, 311, motion="on", door="off")["latched"]
+    assert tick(restored, 200, motion="off", door="off")["occupied"] is False
+    assert tick(restored, 1000, motion="off", door="off")["occupied"] is False
+    assert tick(restored, 1001, motion="on", door="off")["latched"]
+    assert tick(restored, 1100, motion="off", door="off")["occupied"] is True
+
+
+@pytest.mark.parametrize("stored_value", [True, False, None])
+def test_legacy_bee_reconfirmation_does_not_survive_settling_or_manual_resume(
+    stored_value,
+):
+    config = default_room("office") | {
+        "profile": "bee",
+        "entry": source(),
+        "doors": [source("binary_sensor.door")],
+        "close_delay": 20,
+        "off_delay": 0,
+    }
+    # Accept storage from 0.1.0, including a room already stuck at unknown.
+    r = RoomEngine(
+        config,
+        {"value": stored_value, "latched": False, "reconfirm": True, "stale_since": 0},
+    )
+    tick(r, 1000, motion="off", door="off")
+    result = tick(r, 1020, motion="off", door="off")
+    assert result["occupied"] is False and not result["degraded"]
+    assert not r.dump().get("reconfirm")
+    r.override = {"occupied": False, "until": 1030}
+    assert tick(r, 1021, motion="off", door="off")["reason"] == "manual_override"
+    result = tick(r, 1030, motion="off", door="off")
+    assert result["occupied"] is False and not result["degraded"]
+    assert tick(r, 1040, motion="on", door="off")["latched"]
+
+
+@pytest.mark.parametrize("missing", ["motion", "door"])
+def test_bee_restart_still_reports_genuinely_unavailable_sources(missing):
+    r = room("bee", doors=[source("binary_sensor.door")], close_delay=0, off_delay=0)
+    assert tick(r, motion="on", door="off")["latched"]
+    restored = RoomEngine(r.config, r.dump())
+    values = {"motion": "off", "door": "off", missing: "unavailable"}
+    result = tick(restored, 10, **values)
+    assert result["occupied"] is True and result["degraded"]
+    assert result["reason"] == "missing_source"
+    assert tick(restored, 310, **values)["occupied"] is None
+    result = tick(restored, 311, motion="off", door="off")
+    assert result["occupied"] is False and not result["degraded"]
 
 
 def test_unknown_is_never_clear_including_not():
@@ -436,10 +488,15 @@ def test_opening_anticipation_has_no_duplicate_absence_delay():
     assert tick(r, 11, motion="off", door="on")["occupied"] is False
 
 
-def test_lost_door_continuity_requires_reconfirmation_when_closed_again():
-    r = room("bee", doors=[source("binary_sensor.door")], close_delay=0, off_delay=0)
+@pytest.mark.parametrize("outage", [1, 301])
+def test_lost_door_continuity_clears_after_recovery_without_confirmation(outage):
+    r = room("bee", doors=[source("binary_sensor.door")], close_delay=20, off_delay=0)
     tick(r, motion="on", door="off")
-    tick(r, 1, motion="off", door="unavailable")
-    result = tick(r, 2, motion="off", door="off")
-    assert result["occupied"] is True and result["degraded"]
-    assert tick(r, 301, motion="off", door="off")["occupied"] is None
+    assert tick(r, 20, motion="on", door="off")["latched"]
+    assert tick(r, 21, motion="off", door="unavailable")["degraded"]
+    tick(r, 21 + outage, motion="off", door="unavailable")
+    tick(r, 22 + outage, motion="off", door="off")
+    result = tick(r, 42 + outage, motion="off", door="off")
+    assert result["occupied"] is False and not result["degraded"]
+    assert result["reason"] == "unconfirmed_presence"
+    assert tick(r, 43 + outage, motion="on", door="off")["latched"]

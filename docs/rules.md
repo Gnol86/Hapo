@@ -34,6 +34,8 @@ For a living room, an optional release condition can combine `counts_known = tru
 
 ## Persistence and limits
 
-Debounce deadlines and timed overrides are absolute UTC timestamps. A restart rechecks evidence and resumes compatible pending confirmations; it does not reproduce missed events. Continuous-condition timers and numeric hysteresis begin afresh. Door continuity is deliberately not assumed: a previously latched Bee room retains its display temporarily as degraded, then becomes unknown unless reconfirmed. Reopening a monitored door releases that old uncertainty.
+Debounce deadlines and timed overrides are absolute UTC timestamps. A restart rechecks evidence and resumes compatible pending confirmations; it does not reproduce missed events. Continuous-condition timers and numeric hysteresis begin afresh. Bee discards its old latch when door continuity cannot be verified. Once the monitored doors are known closed, normal closure stabilization applies, followed by the configured absence delay. If the trigger condition is false, the room is treated as clear; there is no indefinite reconfirmation wait. A later confirmed detection can create a new latch without any door opening.
+
+An actual unavailable trigger or door still uses the bounded degraded-state policy when the remaining evidence cannot decide. Once sources recover, no confirmation means clear again. Legacy reconfirmation flags stored by 0.1.0 are ignored, including rooms already showing unknown; no configuration change or manual reset is required. Temporary manual overrides retain their normal priority and resume these rules when released.
 
 These are deterministic rules, not probability estimates or person tracking. Open spaces, pets, unmonitored passages and multiple people can violate closed-box assumptions. Configure the profile according to what the sensors can actually establish.
