@@ -71,7 +71,57 @@ class RoomEngine:
         self.previous_doors = None
         self.anticipation_until = None
         self.entry_since = None
+        self.opening_armed = False
+        self.recovery_until = None
         self.override = (stored or {}).get("override")
+
+    def _clear_opening(self) -> None:
+        self.opening_armed = False
+        self.recovery_until = None
+
+    def _reset_entry_confirmation(self) -> None:
+        self.entry_since = None
+        if self.stable.candidate is True:
+            self.stable.candidate = self.stable.candidate_since = None
+
+    def _guard_bee_entry(self, entry, doors, now: float, permitted: bool):
+        """Limit new evidence to an observed passage and its fixed retry window."""
+        if not permitted or doors is None:
+            self._clear_opening()
+            self._reset_entry_confirmation()
+            self.anticipation_until = None
+            return None if doors is None else False
+        if doors is True:
+            if self.previous_doors is not True:
+                # Motion before the passage must not prepay its confirmation.
+                self._reset_entry_confirmation()
+            self.opening_armed = True
+            self.recovery_until = None
+            return entry
+        if self.latched:
+            return entry
+        if self.opening_armed:
+            if self.recovery_until is None:
+                self.recovery_until = (
+                    now + self.config["close_delay"] + self.config["recovery_delay"]
+                )
+                if self.anticipation_until is not None:
+                    self.anticipation_until = min(
+                        self.anticipation_until, self.recovery_until
+                    )
+            if now < self.recovery_until:
+                return entry
+            # Only an uninterrupted attempt begun before expiry may finish.
+            # Its on_delay deadline bounds this exception; no new retry is armed.
+            if (
+                entry is True
+                and self.entry_since is not None
+                and self.entry_since < self.recovery_until
+            ):
+                return entry
+        self._clear_opening()
+        self._reset_entry_confirmation()
+        return None if entry is None else False
 
     def evaluate(
         self,
@@ -106,8 +156,22 @@ class RoomEngine:
             if c["doors"]
             else False
         )
-        reason, desired = "no_activity", entry
         profile = c["profile"]
+        guarded_bee = profile == "bee" and c["require_opening"]
+        if guarded_bee:
+            active_override = self.override and (
+                self.override.get("until") is None or now < self.override["until"]
+            )
+            entry = self._guard_bee_entry(
+                entry,
+                doors,
+                now,
+                c["enabled"]
+                and gate is True
+                and release is False
+                and not active_override,
+            )
+        reason, desired = "no_activity", entry
         anticipation_expired = False
         if entry is True:
             if self.entry_since is None:
@@ -150,7 +214,7 @@ class RoomEngine:
                 if self.closed_since is None:
                     self.closed_since = now
                 settle = self.closed_since + c["close_delay"]
-                if now < settle:
+                if now < settle and (not guarded_bee or self.opening_armed):
                     deadlines.append(settle)
                     # Do not infer an exit during sensor stabilization.
                     if self.stable.value is True and entry is not True:
@@ -160,17 +224,28 @@ class RoomEngine:
                     if not self.latched:
                         self.latched_at = now
                     self.latched = True
+                    if guarded_bee:
+                        self._clear_opening()
                 if self.latched and c["latch_max"]:
                     expiry = self.latched_at + c["latch_max"]
                     if now >= expiry:
                         self.latched = False
                         self.latched_at = None
+                        if guarded_bee:
+                            self._clear_opening()
+                            self._reset_entry_confirmation()
+                            entry = desired = False
                     else:
                         deadlines.append(expiry)
                 if self.latched:
                     desired, reason = True, "closed_box"
                 elif entry is False and now >= settle:
                     reason = "unconfirmed_presence"
+                if guarded_bee and not self.latched:
+                    if not self.opening_armed and entry is not None:
+                        desired, reason = False, "waiting_for_opening"
+                    elif entry is False and desired is not True:
+                        reason = "entry_recovery"
         if c["keep_open"] and doors is True:
             desired, reason = True, "door_open"
         elif self.anticipation_until is not None and desired is not True:
@@ -199,6 +274,8 @@ class RoomEngine:
         if not c["enabled"]:
             desired, reason = None, "disabled"
             self.latched = False
+        if self.recovery_until is not None and now < self.recovery_until:
+            deadlines.append(self.recovery_until)
         off_delay = (
             c["open_delay"] if profile == "bee" and doors is True else c["off_delay"]
         )
@@ -219,6 +296,7 @@ class RoomEngine:
             "degraded": self.stable.degraded,
             "pending": self.stable.pending,
             "latched": self.latched,
+            "recovery_until": self.recovery_until,
             "override": deepcopy(self.override),
             "evidence": sorted(self.conditions.evidence),
             "next_deadline": min(deadlines) if deadlines else None,

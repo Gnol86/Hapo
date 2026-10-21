@@ -500,3 +500,276 @@ def test_lost_door_continuity_clears_after_recovery_without_confirmation(outage)
     assert result["occupied"] is False and not result["degraded"]
     assert result["reason"] == "unconfirmed_presence"
     assert tick(r, 43 + outage, motion="on", door="off")["latched"]
+
+
+def guarded_room(**extra):
+    return room(
+        "bee",
+        **(
+            {
+                "doors": [source("binary_sensor.door")],
+                "require_opening": True,
+                "off_delay": 0,
+                "open_delay": 0,
+            }
+            | extra
+        ),
+    )
+
+
+def enter(r, **values):
+    values = {"motion": "off"} | values
+    tick(r, 0, **(values | {"door": "off"}))
+    tick(r, 1, **(values | {"door": "on"}))
+    return tick(r, 2, **(values | {"door": "off"}))
+
+
+def test_guarded_bee_wind_cannot_start_presence_without_a_passage():
+    r = guarded_room()
+    for now, motion in [(0, "off"), (5, "on"), (200, "on"), (201, "off")]:
+        result = tick(r, now, motion=motion, door="off")
+        assert result["occupied"] is False
+        assert result["reason"] == "waiting_for_opening"
+        assert not result["latched"]
+        assert result["next_deadline"] is None
+
+
+def test_guarded_bee_late_motion_after_stabilization_latches_until_next_opening():
+    r = guarded_room()
+    result = enter(r)
+    assert result["recovery_until"] == 142
+    assert tick(r, 22, motion="off", door="off")["reason"] == "entry_recovery"
+    result = tick(r, 80, motion="on", door="off")
+    assert result["occupied"] is True and result["latched"]
+    assert result["recovery_until"] is None
+    assert not r.opening_armed
+    assert tick(r, 10000, motion="off", door="off")["occupied"] is True
+    assert tick(r, 10001, motion="off", door="on")["occupied"] is False
+
+
+def test_guarded_bee_interrupted_confirmation_can_retry_while_clear():
+    r = guarded_room(on_delay=5)
+    enter(r)
+    assert tick(r, 5, motion="on", door="off")["pending"]
+    assert tick(r, 7, motion="off", door="off")["occupied"] is False
+    assert tick(r, 22, motion="off", door="off")["recovery_until"] == 142
+    assert tick(r, 80, motion="on", door="off")["occupied"] is False
+    result = tick(r, 85, motion="on", door="off")
+    assert result["occupied"] is True and result["latched"]
+
+
+def test_guarded_bee_presence_lost_after_settling_does_not_consume_retries():
+    r = guarded_room()
+    enter(r)
+    assert tick(r, 3, motion="on", door="off")["occupied"] is True
+    assert tick(r, 4, motion="off", door="off")["occupied"] is True
+    result = tick(r, 22, motion="off", door="off")
+    assert result["occupied"] is False and not result["latched"]
+    assert result["recovery_until"] == 142
+    assert tick(r, 60, motion="on", door="off")["latched"]
+
+
+def test_guarded_bee_short_pulses_never_extend_window_or_bypass_confirmation():
+    r = guarded_room(on_delay=5)
+    enter(r)
+    for now in [10, 30, 80, 138]:
+        assert not tick(r, now, motion="on", door="off")["latched"]
+        result = tick(r, now + 1, motion="off", door="off")
+        assert result["occupied"] is False
+        assert result["recovery_until"] == 142
+    result = tick(r, 142, motion="off", door="off")
+    assert result["reason"] == "waiting_for_opening"
+    assert result["next_deadline"] is None
+    assert result["recovery_until"] is None
+    assert not tick(r, 143, motion="on", door="off")["occupied"]
+    assert not tick(r, 200, motion="on", door="off")["latched"]
+
+
+@pytest.mark.parametrize("start,accepted", [(141, True), (142, False), (143, False)])
+def test_guarded_bee_confirmation_at_window_boundary(start, accepted):
+    r = guarded_room(on_delay=5)
+    enter(r)
+    tick(r, start, motion="on", door="off")
+    result = tick(r, start + 5, motion="on", door="off")
+    assert result["occupied"] is accepted
+    assert result["latched"] is accepted
+    assert result["next_deadline"] is None
+
+
+def test_guarded_bee_attempt_before_expiry_finishes_but_cannot_restart_after():
+    r = guarded_room(on_delay=5)
+    enter(r)
+    tick(r, 140, motion="on", door="off")
+    result = tick(r, 142, motion="on", door="off")
+    assert result["next_deadline"] == 145
+    assert result["reason"] == "confirming_presence"
+    result = tick(r, 143, motion="off", door="off")
+    assert result["reason"] == "waiting_for_opening"
+    assert result["next_deadline"] is None
+    tick(r, 144, motion="on", door="off")
+    assert not tick(r, 149, motion="on", door="off")["occupied"]
+
+
+def test_guarded_bee_confirmation_does_not_count_motion_before_opening():
+    r = guarded_room(on_delay=5, close_delay=0)
+    assert not tick(r, 0, motion="on", door="off")["occupied"]
+    tick(r, 20, motion="on", door="on")
+    assert not tick(r, 21, motion="on", door="off")["occupied"]
+    assert tick(r, 25, motion="on", door="off")["latched"]
+
+
+def test_guarded_bee_window_starts_after_last_of_multiple_doors_closes():
+    r = guarded_room(
+        doors=[source("binary_sensor.door"), source("binary_sensor.other")]
+    )
+    tick(r, 0, motion="off", door="off", other="off")
+    tick(r, 1, motion="off", door="on", other="on")
+    assert tick(r, 2, motion="off", door="off", other="on")["recovery_until"] is None
+    assert tick(r, 30, motion="off", door="off", other="off")["recovery_until"] == 170
+    assert tick(r, 169, motion="on", door="off", other="off")["latched"]
+
+
+def test_guarded_bee_reopening_starts_a_new_fixed_window():
+    r = guarded_room(recovery_delay=30)
+    assert enter(r)["recovery_until"] == 52
+    tick(r, 40, motion="off", door="on")
+    assert tick(r, 50, motion="off", door="off")["recovery_until"] == 100
+    assert tick(r, 99, motion="on", door="off")["latched"]
+
+
+def test_guarded_bee_zero_recovery_still_allows_confirmation_started_during_settle():
+    r = guarded_room(recovery_delay=0, on_delay=5)
+    assert enter(r)["recovery_until"] == 22
+    tick(r, 21, motion="on", door="off")
+    assert tick(r, 22, motion="on", door="off")["next_deadline"] == 26
+    assert tick(r, 26, motion="on", door="off")["latched"]
+
+
+@pytest.mark.parametrize("phase", ["window", "confirming", "latched"])
+def test_guarded_bee_restart_does_not_restore_permission_or_pending_detection(phase):
+    r = guarded_room(on_delay=5)
+    enter(r)
+    if phase in ("confirming", "latched"):
+        tick(r, 30, motion="on", door="off")
+    if phase == "latched":
+        assert tick(r, 35, motion="on", door="off")["latched"]
+    restored = RoomEngine(r.config, r.dump())
+    result = tick(restored, 40, motion="on", door="off")
+    assert result["occupied"] is False
+    assert result["reason"] == "waiting_for_opening"
+    assert result["recovery_until"] is None
+    assert not restored.opening_armed
+
+
+@pytest.mark.parametrize("phase", ["window", "latched"])
+def test_guarded_bee_unknown_door_revokes_permission_even_with_active_motion(phase):
+    r = guarded_room()
+    enter(r)
+    if phase == "latched":
+        assert tick(r, 30, motion="on", door="off")["latched"]
+    result = tick(r, 40, motion="on", door="unavailable")
+    assert result["degraded"] and result["reason"] == "missing_source"
+    assert not result["latched"] and result["recovery_until"] is None
+    result = tick(r, 41, motion="on", door="off")
+    assert result["occupied"] is False and not result["degraded"]
+    assert result["reason"] == "waiting_for_opening"
+
+
+def test_guarded_bee_motion_outage_interrupts_attempt_without_extending_window():
+    r = guarded_room(on_delay=5)
+    enter(r)
+    tick(r, 139, motion="on", door="off")
+    assert tick(r, 140, motion="unavailable", door="off")["degraded"]
+    result = tick(r, 143, motion="on", door="off")
+    assert result["occupied"] is False
+    assert result["reason"] == "waiting_for_opening"
+
+
+def test_guarded_bee_open_door_at_start_allows_detection_but_not_anticipation():
+    r = guarded_room(anticipate=True, close_delay=0)
+    result = tick(r, 0, motion="off", door="on")
+    assert result["occupied"] is False
+    assert r.anticipation_until is None
+    assert tick(r, 1, motion="on", door="on")["occupied"] is True
+    assert tick(r, 2, motion="on", door="off")["latched"]
+
+
+@pytest.mark.parametrize("option", ["anticipate", "keep_open"])
+def test_guarded_bee_door_options_never_fabricate_a_latch(option):
+    r = guarded_room(**{option: True}, recovery_delay=5)
+    tick(r, 0, motion="off", door="off")
+    assert tick(r, 1, motion="off", door="on")["occupied"] is True
+    tick(r, 2, motion="off", door="off")
+    assert not tick(r, 22, motion="off", door="off")["latched"]
+    result = tick(r, 27, motion="on", door="off")
+    assert result["occupied"] is False and not result["latched"]
+
+
+def test_guarded_bee_latch_limit_requires_a_new_opening_even_if_motion_stays_on():
+    r = guarded_room(close_delay=0, latch_max=10)
+    enter(r)
+    assert tick(r, 3, motion="on", door="off")["latched"]
+    result = tick(r, 13, motion="on", door="off")
+    assert result["occupied"] is False and not result["latched"]
+    assert result["reason"] == "waiting_for_opening"
+    assert not tick(r, 14, motion="on", door="off")["occupied"]
+    tick(r, 15, motion="on", door="on")
+    assert tick(r, 16, motion="on", door="off")["latched"]
+
+
+@pytest.mark.parametrize("condition", ["gate", "release"])
+def test_guarded_bee_context_clear_does_not_reuse_previous_passage(condition):
+    r = guarded_room(close_delay=0, **{condition: source("binary_sensor.context")})
+    permitted = "on" if condition == "gate" else "off"
+    blocked = "off" if condition == "gate" else "on"
+    enter(r, context=permitted)
+    assert tick(r, 3, motion="on", door="off", context=permitted)["latched"]
+    assert not tick(r, 4, motion="on", door="off", context=blocked)["occupied"]
+    result = tick(r, 5, motion="on", door="off", context=permitted)
+    assert result["occupied"] is False and not result["latched"]
+    assert result["reason"] == "waiting_for_opening"
+
+
+@pytest.mark.parametrize("occupied", [True, False])
+def test_guarded_bee_manual_override_does_not_create_a_passage(occupied):
+    r = guarded_room(close_delay=0)
+    r.override = {"occupied": occupied, "until": 10}
+    result = tick(r, 0, motion="on", door="off")
+    assert result["occupied"] is occupied
+    assert result["reason"] == "manual_override"
+    assert not result["latched"]
+    result = tick(r, 10, motion="on", door="off")
+    assert result["occupied"] is False
+    assert result["reason"] == "waiting_for_opening"
+
+
+@pytest.mark.parametrize("recovery_delay", [0, 10])
+def test_guarded_bee_anticipation_cannot_restart_confirmation_after_window_expiry(
+    recovery_delay,
+):
+    r = guarded_room(
+        close_delay=0,
+        recovery_delay=recovery_delay,
+        on_delay=5,
+        off_delay=60,
+        anticipate=True,
+    )
+    enter(r)
+    if recovery_delay:
+        result = tick(r, 6, motion="off", door="off")
+        assert result["occupied"] is True
+        assert not result["latched"]
+    expires = 2 + recovery_delay
+    for now in [expires, expires + 5, expires + 10]:
+        result = tick(r, now, motion="off", door="off")
+        assert result["occupied"] is False
+        assert result["reason"] == "waiting_for_opening"
+        assert result["next_deadline"] is None
+
+
+@pytest.mark.parametrize(
+    "profile", ["direct", "motion", "hybrid", "logic", "contextual"]
+)
+def test_opening_requirement_only_applies_to_bee(profile):
+    r = room(profile, require_opening=True)
+    assert tick(r, motion="on")["occupied"] is True

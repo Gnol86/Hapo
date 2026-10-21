@@ -10,7 +10,7 @@ export interface Room {
   id: string; name: string; area_id: string | null; enabled: boolean; profile: Profile;
   entry: Condition | null; hold: Condition | null; gate: Condition | null; release: Condition | null;
   doors: Condition[]; on_delay: number; off_delay: number; open_delay: number; close_delay: number;
-  anticipate: boolean; keep_open: boolean; latch_max: number;
+  anticipate: boolean; keep_open: boolean; latch_max: number; require_opening: boolean; recovery_delay: number;
 }
 export interface Resident {
   id: string; name: string; entity_id: string; home_states: string[]; presence_delay: number; sleep_source: Condition | null;
@@ -27,6 +27,7 @@ export interface EntityOption {
 export interface RuntimeRoom {
   occupied: boolean | null; reason: string; degraded: boolean; pending: boolean; latched: boolean;
   evidence: string[]; next_deadline: number | null; override: { occupied: boolean; until: number | null } | null;
+  recovery_until?: number | null;
 }
 export interface RuntimeResident { present: boolean | null; sleeping: boolean | null; manual_sleep: boolean; degraded: boolean; pending: boolean }
 export interface RuntimeHome { occupied?: boolean | null; mode?: string | null; present_count?: number | null; awake_count?: number | null; sleeping_count?: number | null; guests?: boolean; degraded?: boolean; counts_known?: boolean; override?: { mode: string; until: number | null } | null; next_deadline?: number | null }
@@ -39,6 +40,9 @@ export interface Snapshot {
   suggestions?: Record<string, Suggestion[]>;
 }
 export interface Hass {
+  dockedSidebar?: "docked" | "always_hidden" | "auto";
+  kioskMode?: boolean;
+  auth?: { external?: { config?: { hasSidebar?: boolean } } };
   user?: { id: string };
   language?: string; locale?: { language: string }; themes?: { darkMode: boolean };
   states: Record<string, { state: string; attributes: Record<string, unknown> }>;

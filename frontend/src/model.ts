@@ -8,7 +8,8 @@ export function createId(): string {
 }
 export function room(id: string, area_id: string | null = null): Room {
   return { id, name: "", area_id, enabled: true, profile: "motion", entry: null, hold: null, gate: null, release: null,
-    doors: [], on_delay: 0, off_delay: 60, open_delay: 60, close_delay: 20, anticipate: false, keep_open: false, latch_max: 0 };
+    doors: [], on_delay: 0, off_delay: 60, open_delay: 60, close_delay: 20, anticipate: false, keep_open: false, latch_max: 0,
+    require_opening: false, recovery_delay: 120 };
 }
 export function resident(id: string): Resident {
   return { id, name: "", entity_id: "", home_states: ["home"], presence_delay: 20, sleep_source: null };

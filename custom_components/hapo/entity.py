@@ -69,6 +69,7 @@ class HapoEntity(Entity):
             "pending",
             "latched",
             "next_deadline",
+            "recovery_until",
             "override",
         )
         result = {

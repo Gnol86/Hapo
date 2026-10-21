@@ -26,6 +26,8 @@ def default_room(room_id: str, area_id: str | None = None) -> dict:
         "off_delay": 60,
         "open_delay": 60,
         "close_delay": 20,
+        "require_opening": False,
+        "recovery_delay": 120,
         "anticipate": False,
         "keep_open": False,
         "latch_max": 0,
@@ -285,7 +287,7 @@ def validate_config(value: object) -> dict:
         room = config["rooms"][key] = default_room(key) | room
         if room["profile"] not in PROFILES:
             raise ValueError("invalid_profile")
-        for field in ("enabled", "anticipate", "keep_open"):
+        for field in ("enabled", "anticipate", "keep_open", "require_opening"):
             if not isinstance(room[field], bool):
                 raise ValueError("invalid_boolean")
         if room["area_id"] is not None and not isinstance(room["area_id"], str):
@@ -295,6 +297,7 @@ def validate_config(value: object) -> dict:
             "off_delay",
             "open_delay",
             "close_delay",
+            "recovery_delay",
             "latch_max",
         ):
             duration(room[field])

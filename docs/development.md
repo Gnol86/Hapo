@@ -11,6 +11,8 @@ The tests cover profiles, retriggers, multiple doors, stillness, late detections
 
 Bee regression scenarios cover a startup motion pulse ending during stabilization, clearing without further state events, late motion reactivating the room, old persisted reconfirmation flags, manual resume, and recovery from brief or prolonged door outages. Missing live sources still exercise the three-valued failure policy.
 
+The optional Bee opening requirement adds fixed per-entry recovery deadlines, with 120 seconds as the per-room default. Coverage includes blocked motion without an opening, late and interrupted confirmations, a continuous attempt finishing after the deadline, multiple doors, stillness after latching, maximum latch expiry, restart and door outages, and compatibility when the option is disabled. Panel tests cover conditional controls, per-room save persistence, old room defaults and translated recovery details. Keep the continuous trigger confirmation, door stabilization and recovery period distinct in labels and explanations.
+
 Pure engine replay is useful for historical comparisons. Evaluate every scheduled deadline before the next recorded state event, and inject manual sleep actions separately from location state changes. Recorder history alone cannot prove unrecorded sensor continuity.
 
 For manual verification, use a separate Home Assistant configuration directory, bind HTTP to localhost, install this component and configure simulated input entities. Test actual configuration flows, websocket saves, services, generated entities and the native sidebar panel. Verify narrow/wide layouts and both themes. Household installation and physical behavior remain a separate validation stage.

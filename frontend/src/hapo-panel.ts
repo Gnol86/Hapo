@@ -9,20 +9,25 @@ import "./condition-editor";
 import "./entity-picker";
 
 type View = "overview" | "rooms" | "residents" | "home";
+type RoomSection = "presence" | "detection" | "timing" | "context" | "settings";
+const roomSections: RoomSection[] = ["presence", "detection", "timing", "context", "settings"];
 export class HapoPanel extends LitElement {
-  static properties = { hass: { attribute: false }, snapshot: { state: true }, draft: { state: true }, view: { state: true }, selectedRoom: { state: true }, selectedResident: { state: true }, error: { state: true }, saving: { state: true }, message: { state: true }, query: { state: true } };
+  static properties = { hass: { attribute: false }, narrow: { type: Boolean }, snapshot: { state: true }, draft: { state: true }, view: { state: true }, roomSection: { state: true }, selectedRoom: { state: true }, selectedResident: { state: true }, error: { state: true }, saving: { state: true }, message: { state: true }, query: { state: true }, residentQuery: { state: true }, overrideMinutes: { state: true } };
   static styles = panelStyles;
   hass?: Hass;
+  narrow = false;
   snapshot?: Snapshot;
   draft?: Config;
   private baseRevision = 0;
-  private view: View = "overview";
+  private view: View = "rooms";
+  private roomSection: RoomSection = "presence";
   private selectedRoom = "";
   private selectedResident = "";
   private error = "";
   private message = "";
   private saving = false;
   private query = "";
+  private residentQuery = "";
   private overrideMinutes = 60;
   private selectedMode = "auto";
   private unsubscribe?: () => void;
@@ -68,6 +73,7 @@ export class HapoPanel extends LitElement {
   private rememberDraft() { try { if (this.draftKey) { if (this.draft) sessionStorage.setItem(this.draftKey, JSON.stringify({ config: this.draft, revision: this.baseRevision })); else sessionStorage.removeItem(this.draftKey); } } catch { /* Keep the in-memory draft if browser storage is unavailable. */ } }
   acceptSnapshot(snapshot: Snapshot) {
     const first = !this.snapshot; this.snapshot = snapshot;
+    if (!snapshot.admin) { this.view = "overview"; this.draft = undefined; }
     if (first && snapshot.admin && this.draftKey) {
       try { const saved = sessionStorage.getItem(this.draftKey); if (saved) { const value = JSON.parse(saved); this.draft = parseImport(JSON.stringify(value.config)); this.baseRevision = value.revision; } } catch { /* Ignore an invalid saved browser draft. */ }
     }
@@ -87,7 +93,26 @@ export class HapoPanel extends LitElement {
     if (!valid) this.error = this.t("invalid");
     return valid;
   }
-  private navigate(view: View, key = "") { if (!this.valid()) return; this.view = view; if (view === "rooms") this.selectedRoom = key; if (view === "residents") this.selectedResident = key; this.error = ""; }
+  private navigate(view: View, key = "") {
+    if (this.saving || !this.valid()) return;
+    this.view = view;
+    if (view === "rooms") { if (this.selectedRoom !== key) this.roomSection = "presence"; this.selectedRoom = key; }
+    if (view === "residents") this.selectedResident = key;
+    this.error = "";
+    void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLElement>(key ? ".view-title" : ".rail-heading h2")?.focus());
+  }
+  private selectRoomSection(section: RoomSection) {
+    if (this.saving || !this.valid()) return false;
+    this.roomSection = section; this.error = ""; return true;
+  }
+  private roomTabKey(event: KeyboardEvent, section: RoomSection) {
+    const index = roomSections.indexOf(section);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? roomSections.length - 1
+      : event.key === "ArrowRight" ? (index + 1) % roomSections.length : event.key === "ArrowLeft" ? (index + roomSections.length - 1) % roomSections.length : -1;
+    if (next < 0) return;
+    event.preventDefault();
+    if (this.selectRoomSection(roomSections[next])) void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLElement>(`#room-tab-${roomSections[next]}`)?.focus());
+  }
   private async save() {
     if (!this.hass || !this.draft || !this.valid() || this.saving) return;
     this.saving = true; this.error = "";
@@ -125,60 +150,150 @@ export class HapoPanel extends LitElement {
     input.value = "";
   }
   render() {
-    return html`<header><button class="menu-button" aria-label=${this.t("menu")} @click=${() => this.dispatchEvent(new CustomEvent("hass-toggle-menu", { bubbles: true, composed: true }))}>☰</button><div class="brand"><svg class="mark" viewBox="0 0 48 48" aria-hidden="true"><path d="M7 23 24 8l17 15v18H29V29H19v12H7Z" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/><circle cx="24" cy="21" r="3" fill="currentColor"/></svg><div><h1>Hapo</h1><small>${this.t("subtitle")}</small></div></div>${this.snapshot ? this.status(this.snapshot.runtime.home.occupied) : nothing}</header>
-      <nav aria-label="Hapo">${(["overview", "rooms", "residents", "home"] as View[]).filter(v => this.admin || v === "overview").map(view => html`<button aria-current=${this.view === view ? "page" : "false"} @click=${() => this.navigate(view)}>${this.t(view)}</button>`)}</nav>
-      <main ?inert=${this.saving}>${this.error ? html`<div role="alert" class="error">${this.error}</div>` : nothing}${this.conflict ? html`<div role="alert" class="notice">${this.t("conflict")}</div>` : nothing}${this.message ? html`<div role="status" class="notice">${this.message}</div>` : nothing}
-        ${!this.snapshot ? html`<div class="empty"><p>${this.t("loading")}</p>${this.error ? html`<button @click=${() => this.connect()}>${this.t("retry")}</button>` : nothing}</div>` : keyed(this.editorEpoch, this.view === "overview" ? this.overview() : this.view === "rooms" ? this.rooms() : this.view === "residents" ? this.residents() : this.home())}
-      </main>${this.draft ? html`<footer class="savebar"><span>${this.t("draft")}</span><div class="actions"><button ?disabled=${this.saving} @click=${() => this.discard()}>${this.t("discard")}</button><button class="primary" ?disabled=${this.saving || this.conflict} @click=${() => this.save()}>${this.t(this.saving ? "saving" : "save")}</button></div></footer>` : nothing}`;
+    const showSidebarButton = (this.narrow || this.hass?.dockedSidebar === "always_hidden")
+      && !this.hass?.kioskMode && this.hass?.auth?.external?.config?.hasSidebar !== true;
+    const views: View[] = this.admin ? ["rooms", "residents", "home"] : ["overview"];
+    return html`<header class="app-header"><div class="brand" title=${this.t("subtitle")}>
+        ${showSidebarButton ? html`<button class="icon-button sidebar-toggle" aria-label=${this.t("menu")} title=${this.t("menu")}
+          @click=${() => this.dispatchEvent(new CustomEvent("hass-toggle-menu", { detail: { open: true }, bubbles: true, composed: true }))}><ha-icon icon="mdi:menu" aria-hidden="true"></ha-icon></button>` : nothing}
+        <ha-icon icon="mdi:home-account" aria-hidden="true"></ha-icon><h1>Hapo</h1><span class="sr-only">${this.t("subtitle")}</span></div>
+      <nav class="top-nav" aria-label="Hapo">${views.map(view => html`<button aria-current=${this.view === view ? "page" : nothing} ?disabled=${this.saving}
+        @click=${() => this.navigate(view)}>${this.t(view === "home" ? "globalSettings" : view)}</button>`)}</nav></header>
+      <div class="content"><main lang=${this.locale} ?inert=${this.saving}>
+        ${this.error ? html`<div role="alert" class="notice error"><ha-icon icon="mdi:alert-circle-outline" aria-hidden="true"></ha-icon><span class="grow">${this.error}</span></div>` : nothing}
+        ${this.conflict ? html`<div role="alert" class="notice">${this.t("conflict")}</div>` : nothing}
+        ${this.message ? html`<div role="status" class="notice">${this.message}</div>` : nothing}
+        ${!this.snapshot ? html`<div class="empty-state"><p role="status">${this.t("loading")}</p>${this.error ? html`<button @click=${() => this.connect()}>${this.t("retry")}</button>` : nothing}</div>`
+          : keyed(this.editorEpoch, this.view === "overview" ? html`<div class="overview">${this.overview()}</div>` : this.view === "rooms" ? this.rooms() : this.view === "residents" ? this.residents() : this.home())}
+      </main></div>
+      ${this.draft ? html`<footer class="savebar" role="status"><span class="grow">${this.t("draft")}</span><button ?disabled=${this.saving} @click=${() => this.discard()}>${this.t("discard")}</button><button class="primary" ?disabled=${this.saving || this.conflict} @click=${() => this.save()}>${this.t(this.saving ? "saving" : "save")}</button></footer>` : nothing}`;
+  }
+  private homeSummary() {
+    const home = this.snapshot!.runtime.home;
+    return html`<section class="home-banner"><div><small>${this.t("home")}</small><div class="home-mode">${this.modeName(home.mode)}</div>${home.degraded ? html`<small>${this.t("degraded")}</small>` : nothing}</div><div class="numbers">${["present_count", "awake_count", "sleeping_count"].map(key => html`<div><span class="number">${home[key as "present_count"] ?? "—"}</span><small>${this.t(key)}</small></div>`)}</div>${this.check("guests", home.guests ?? false, value => void this.command("guests", "", value))}</section>`;
   }
   private overview() {
-    const home = this.snapshot!.runtime.home;
-    return html`<section class="home-banner"><div><small>${this.t("home")}</small><div class="home-mode">${this.modeName(home.mode)}</div>${home.degraded ? html`<small>${this.t("degraded")}</small>` : nothing}</div><div class="numbers">${["present_count", "awake_count", "sleeping_count"].map(key => html`<div><span class="number">${home[key as "present_count"] ?? "—"}</span><small>${this.t(key)}</small></div>`)}</div>${this.check("guests", home.guests ?? false, value => void this.command("guests", "", value))}</section>
+    return html`${this.homeSummary()}
       <div class="toolbar"><h2>${this.t("rooms")}</h2>${this.admin ? html`<button @click=${() => this.addRoom()}>+ ${this.t("addRoom")}</button>` : nothing}</div>
       ${Object.keys(this.snapshot!.runtime.rooms).length ? html`<div class="grid">${Object.entries(this.snapshot!.runtime.rooms).map(([key, result]) => html`<article class="card"><div class="card-top"><button class="title" ?disabled=${!this.admin} @click=${() => this.navigate("rooms", key)}>${this.roomName(key)}</button>${this.status(result.occupied)}</div><p class="hint">${this.t(result.reason)}</p>${result.next_deadline ? html`<small class="readout">${this.t("next")} · ${new Date(result.next_deadline * 1000).toLocaleTimeString(this.locale)}</small>` : nothing}<div class="actions"><button class="link" @click=${() => this.command("room_override", key, "auto")}>${this.t("resume")}</button></div></article>`)}</div>` : html`<div class="empty"><p>${this.t("emptyRooms")}</p></div>`}
       <h2 class="section">${this.t("residents")}</h2><div class="grid">${Object.entries(this.snapshot!.runtime.residents).map(([key, r]) => html`<article class="card"><div class="card-top"><h3>${this.residentName(key)}</h3><small>${this.t(r.present == null ? "unknown" : r.present ? "present" : "absent")}</small></div><p>${this.t(r.sleeping == null ? "unknown" : r.sleeping ? "sleeping" : "awake")}</p><div class="actions"><button @click=${() => this.command("sleep", key, "sleeping")}>${this.t("sleep")}</button><button @click=${() => this.command("sleep", key, "awake")}>${this.t("wake")}</button></div></article>`)}</div>`;
   }
-  private addRoom() { if (!this.valid()) return; const id = createId(); this.change(c => { c.rooms[id] = room(id); }); this.view = "rooms"; this.selectedRoom = id; }
+  private addRoom(areaId: string | null = null) {
+    if (!this.valid()) return;
+    const id = createId(); this.change(c => { c.rooms[id] = room(id, areaId); });
+    this.view = "rooms"; this.selectedRoom = id; this.roomSection = areaId ? "detection" : "settings";
+  }
+  private roomItems() {
+    const configured = Object.keys(this.config?.rooms ?? {}).map(key => ({ key, name: this.roomName(key), areaId: this.config!.rooms[key].area_id, configured: true }));
+    const assigned = new Set(configured.map(item => item.areaId));
+    return [...configured, ...(this.snapshot?.catalog?.areas ?? []).filter(area => !assigned.has(area.area_id)).map(area => ({ key: `area:${area.area_id}`, name: area.name, areaId: area.area_id, configured: false }))];
+  }
   private rooms() {
     if (!this.config) return nothing;
+    const items = this.roomItems();
+    const selected = items.find(item => item.key === this.selectedRoom);
     const current = this.config.rooms[this.selectedRoom];
-    return html`<div class="split ${current ? "has-selection" : ""}"><aside class="sidebar"><input aria-label=${this.t("search")} placeholder=${this.t("search")} .value=${this.query} @input=${(e: Event) => { this.query = (e.target as HTMLInputElement).value; }}>${Object.keys(this.config.rooms).filter(key => this.roomName(key).toLocaleLowerCase().includes(this.query.toLocaleLowerCase())).map(key => html`<button class=${key === this.selectedRoom ? "selected" : ""} @click=${() => this.navigate("rooms", key)}><span>${this.roomName(key)}</span>${this.status(this.snapshot!.runtime.rooms[key]?.occupied)}</button>`)}<button class="link" @click=${() => this.addRoom()}>+ ${this.t("addRoom")}</button></aside><section class="editor">${current ? this.roomEditor(current) : html`<div class="empty"><p>${this.t("emptyRooms")}</p><button @click=${() => this.addRoom()}>${this.t("addRoom")}</button></div>`}</section></div>`;
+    const filtered = items.filter(item => item.name.toLocaleLowerCase().includes(this.query.toLocaleLowerCase()));
+    return html`<div class="workspace ${selected ? "has-selection" : ""}">
+      <aside class="room-rail" aria-label=${this.t("rooms")}><div class="rail-heading"><h2 tabindex="-1">${this.t("rooms")}</h2><span class="count">${items.length}</span></div>
+        <label class="rail-search"><span>${this.t("search")}</span><input type="search" .value=${this.query} @input=${(e: Event) => { this.query = (e.target as HTMLInputElement).value; }}></label>
+        <div class="room-list">${filtered.map(item => {
+          const result = this.snapshot!.runtime.rooms[item.key];
+          const r = this.config!.rooms[item.key];
+          return html`<div class="room-item" ?data-active=${item.key === this.selectedRoom} data-state=${result?.occupied == null ? "unknown" : result.occupied ? "on" : "off"}>
+            <button class="room-link" aria-label=${item.name} aria-current=${item.key === this.selectedRoom ? "page" : nothing} @click=${() => this.navigate("rooms", item.key)}>
+              <ha-icon icon=${!r ? "mdi:plus-circle-outline" : result?.occupied ? "mdi:account" : "mdi:account-outline"} aria-hidden="true"></ha-icon>
+              <span><strong>${item.name}</strong><small class="room-meta">${r ? `${this.t(r.profile)} · ${this.t(!r.enabled ? "disabled" : result?.occupied == null ? "unknown" : result.occupied ? "occupied" : "clear")}` : this.t("unconfigured")}</small></span>
+            </button>
+            ${r ? html`<button class="icon-button quick-toggle" aria-label=${`${this.t("resume")} · ${item.name}`} title=${this.t("resume")} ?disabled=${!result?.override} @click=${() => this.command("room_override", item.key, "auto")}><ha-icon icon="mdi:restore" aria-hidden="true"></ha-icon></button>` : nothing}
+          </div>`;
+        })}</div>
+        ${!filtered.length ? html`<p class="empty">${this.t(items.length ? "noRoomsMatch" : "emptyRooms")}</p>` : nothing}
+        <button class="link rail-add" @click=${() => this.addRoom()}><ha-icon icon="mdi:plus" aria-hidden="true"></ha-icon>${this.t("addRoom")}</button>
+      </aside>
+      <section class="room-detail ${selected ? "" : "empty-detail"}">
+        ${current ? this.roomEditor(current) : selected ? html`${this.detailHeading(selected.name, "rooms")}<div class="empty-state"><ha-icon icon="mdi:home-account" aria-hidden="true"></ha-icon><h3>${this.t("unconfigured")}</h3><p>${this.t("configureRoomHelp")}</p><button class="primary" @click=${() => this.addRoom(selected.areaId)}>${this.t("configure")}</button></div>`
+          : html`<div class="empty-state welcome"><ha-icon icon="mdi:home-account" aria-hidden="true"></ha-icon><h2 class="view-title" tabindex="-1">${this.t("chooseRoom")}</h2><p>${this.t("chooseRoomHelp")}</p></div>`}
+      </section></div>`;
+  }
+  private detailHeading(name: string, view: View) {
+    return html`<div class="room-heading"><button class="icon-button back-button" aria-label=${this.t("back")} @click=${() => this.navigate(view)}><ha-icon icon="mdi:arrow-left" aria-hidden="true"></ha-icon></button><h2 class="view-title grow" tabindex="-1">${name}</h2></div>`;
   }
   private roomEditor(r: Room) {
     const result = this.snapshot!.runtime.rooms[r.id];
-    return html`<button class="mobile-back link" @click=${() => this.navigate("rooms")}>← ${this.t("back")}</button><div class="editor-head"><h2>${this.roomName(r.id)}</h2>${this.status(result?.occupied)}</div>
-      <div class="fields">${this.text("name", r.name, name => this.patchRoom({ name }))}<label>${this.t("area")}<select data-selected=${r.area_id ?? ""} .value=${r.area_id ?? ""} @change=${(e: Event) => this.patchRoom({ area_id: (e.target as HTMLSelectElement).value || null })}><option value="" ?selected=${!r.area_id}>${this.t("noArea")}</option>${this.snapshot!.catalog!.areas.map(a => html`<option value=${a.area_id} ?selected=${r.area_id === a.area_id}>${a.name}</option>`)}</select></label></div>
-      <label>${this.t("profile")}<select data-selected=${r.profile} .value=${r.profile} @change=${(e: Event) => this.patchRoom({ profile: (e.target as HTMLSelectElement).value as Room["profile"] })}>${profiles.map(p => html`<option value=${p} ?selected=${r.profile === p}>${this.t(p)}</option>`)}</select></label><p class="hint">${this.t(r.profile + "Help")}</p>
-      ${r.area_id ? html`<details><summary>${this.t("suggestions")}</summary><p class="hint">${this.t("suggestHelp")}</p>${(this.snapshot!.suggestions?.[r.area_id] ?? []).map(choice => html`<div class="suggestion"><strong>${this.t(choice.profile)}</strong><p class="hint">${this.t(choice.reason)}</p><small>${[...choice.entry, ...choice.hold, ...choice.doors].map(id => this.entities.find(e => e.entity_id === id)?.name ?? id).join(" · ")}</small><p><button @click=${() => this.change(c => { c.rooms[r.id] = applySuggestion(r, choice); })}>${this.t("apply")}</button></p></div>`)}</details>` : nothing}
-      ${this.condition("entry", r.entry, entry => this.patchRoom({ entry }), false)}
-      ${r.profile === "hybrid" ? this.condition("hold", r.hold, hold => this.patchRoom({ hold })) : nothing}
-      ${r.profile === "bee" || r.doors.length > 0 || r.anticipate || r.keep_open ? html`<section class="section"><h3>${this.t("doors")}</h3>${r.doors.map((door, i) => this.condition("entity", door, value => this.patchRoom({ doors: value ? r.doors.map((d, j) => i === j ? value : d) : r.doors.filter((_, j) => j !== i) }), true, true, true))}<button @click=${() => this.patchRoom({ doors: [...r.doors, defaultCondition("state")] })}>+ ${this.t("addDoor")}</button></section>` : nothing}
-      <details><summary>${this.t("delays")}</summary><div class="fields">${(["on_delay", "off_delay", ...(r.profile === "bee" ? ["open_delay", "close_delay", "latch_max"] : [])] as (keyof Room)[]).map(key => this.number(key, r[key] as number, value => this.patchRoom({ [key]: value })))}</div>${this.check("anticipate", r.anticipate, anticipate => this.patchRoom({ anticipate }))}${this.check("keep_open", r.keep_open, keep_open => this.patchRoom({ keep_open }))}${this.check("enabled", r.enabled, enabled => this.patchRoom({ enabled }))}</details>
-      <details ?open=${r.profile === "contextual"}><summary>${this.t("contextual")}</summary>${this.condition("gate", r.gate, gate => this.patchRoom({ gate }))}${this.condition("release", r.release, release => this.patchRoom({ release }))}</details>
-      ${result ? html`<details><summary>${this.t("details")}</summary><p class="readout">${this.t("identifier")}: <code>${r.id}</code></p><p>${this.t(result.reason)}</p>${result.latched ? html`<p>${this.t("latched")}</p>` : nothing}<small>${this.t("evidence")}: ${result.evidence.map(id => this.entities.find(e => e.entity_id === id)?.name ?? id).join(", ") || "—"}</small><p>${result.next_deadline ? `${this.t("next")}: ${new Date(result.next_deadline * 1000).toLocaleTimeString(this.locale)}` : this.t("noDeadline")}</p>${this.number("duration", this.overrideMinutes, value => { this.overrideMinutes = value; }, 10080)}<div class="actions"><button @click=${() => this.command("room_override", r.id, "occupied", this.overrideMinutes * 60)}>${this.t("forceOccupied")}</button><button @click=${() => this.command("room_override", r.id, "clear", this.overrideMinutes * 60)}>${this.t("forceClear")}</button><button @click=${() => this.command("room_override", r.id, "auto")}>${this.t("resume")}</button></div></details>` : nothing}
-      <div class="section"><button class="danger link" @click=${() => { this.change(c => { delete c.rooms[r.id]; }); this.selectedRoom = ""; }}>${this.t("remove")}</button></div>`;
+    return html`${this.detailHeading(this.roomName(r.id), "rooms")}
+      <div class="room-summary"><div class="row">${this.status(result?.occupied)}<span class="badge">${this.t(result?.reason ?? "unconfigured")}</span></div>
+        <div class="room-toolbar"><div class="actions">
+          <button ?disabled=${!result} @click=${() => this.command("room_override", r.id, "occupied", this.overrideMinutes * 60)}><ha-icon icon="mdi:account-check-outline" aria-hidden="true"></ha-icon>${this.t("forceOccupied")}</button>
+          <button ?disabled=${!result} @click=${() => this.command("room_override", r.id, "clear", this.overrideMinutes * 60)}><ha-icon icon="mdi:account-off-outline" aria-hidden="true"></ha-icon>${this.t("forceClear")}</button>
+          ${result?.override ? html`<button @click=${() => this.command("room_override", r.id, "auto")}><ha-icon icon="mdi:restore" aria-hidden="true"></ha-icon>${this.t("resume")}</button>` : nothing}
+        </div><div class="room-modes">${this.check("enabled", r.enabled, enabled => this.patchRoom({ enabled }))}</div></div>
+        <p class="help compact-help">${this.t("presenceControlsHelp")}</p>
+      </div>
+      <nav class="room-tabs" role="tablist" aria-label=${this.t("roomSections")}>${roomSections.map(section => html`<button role="tab" id=${`room-tab-${section}`} aria-controls="room-panel" aria-selected=${String(this.roomSection === section)} tabindex=${this.roomSection === section ? "0" : "-1"}
+        @keydown=${(e: KeyboardEvent) => this.roomTabKey(e, section)} @click=${() => this.selectRoomSection(section)}>${this.t(section + "Tab")}</button>`)}</nav>
+      <div id="room-panel" class="room-panel" role="tabpanel" aria-labelledby=${`room-tab-${this.roomSection}`}>
+        ${this.roomSection === "presence" ? this.roomPresence(r) : this.roomSection === "detection" ? this.roomDetection(r) : this.roomSection === "timing" ? this.roomTiming(r)
+          : this.roomSection === "context" ? html`<section class="settings-group"><h3>${this.t("contextTab")}</h3><p class="help">${this.t("contextHelp")}</p>${this.condition("gate", r.gate, gate => this.patchRoom({ gate }))}${this.condition("release", r.release, release => this.patchRoom({ release }))}</section>` : this.roomSettings(r)}
+      </div>`;
   }
-  private addResident() { if (!this.valid()) return; const id = createId(); this.change(c => { c.residents[id] = resident(id); }); this.selectedResident = id; }
+  private roomPresence(r: Room) {
+    const result = this.snapshot!.runtime.rooms[r.id];
+    const active = this.snapshot!.config?.rooms[r.id] ?? r;
+    const sourceIds = new Set<string>();
+    const collect = (condition: Condition | null) => { if (!condition) return; if (condition.entity_id) sourceIds.add(condition.entity_id); condition.conditions?.forEach(collect); if (condition.condition) collect(condition.condition); };
+    [active.entry, active.hold, ...active.doors, active.gate, active.release].forEach(collect);
+    return html`<section class="settings-group"><div class="section-heading"><h3>${this.t("details")}</h3></div>
+      <p class="row">${result?.latched ? html`<ha-icon icon="mdi:lock-outline" aria-hidden="true"></ha-icon>` : nothing}${this.t(result?.reason ?? "saveFirst")}</p>
+      ${result ? html`<details class="help-details"><summary>${this.t("evidence")}</summary><p class="help">${result.evidence.map(id => this.entities.find(e => e.entity_id === id)?.name ?? id).join(", ") || "—"}</p></details>` : nothing}
+      ${result?.recovery_until != null ? html`<p class="readout">${this.t("recoveryUntil")}: ${new Date(result.recovery_until * 1000).toLocaleTimeString(this.locale)}</p>` : nothing}
+      <p class="help readout">${result?.next_deadline ? `${this.t("next")}: ${new Date(result.next_deadline * 1000).toLocaleTimeString(this.locale)}` : this.t("noDeadline")}</p></section>
+      <section class="settings-group"><h3>${this.t("sources")}</h3>
+        ${sourceIds.size ? html`<div class="source-list">${[...sourceIds].map(id => { const entity = this.entities.find(e => e.entity_id === id); return html`<div class="source-row"><ha-icon icon=${entity?.device_class === "door" || entity?.device_class === "opening" ? "mdi:door" : "mdi:motion-sensor"} aria-hidden="true"></ha-icon><div class="grow"><strong>${entity?.name ?? id}</strong><small>${id}</small></div><span class="badge">${entity?.state ?? this.t("unknown")}</span></div>`; })}</div>` : html`<p class="help">${this.t("noSources")}</p>`}
+      </section>
+      <section class="settings-group"><h3>${this.t("manual_override")}</h3><div class="field-grid">${this.number("duration", this.overrideMinutes, value => { this.overrideMinutes = value; }, 10080)}</div><p class="help compact-help">${this.t("overrideHelp")}</p></section>`;
+  }
+  private roomDetection(r: Room) {
+    return html`<section class="settings-group"><h3>${this.t("profile")}</h3><label>${this.t("profile")}<select data-selected=${r.profile} .value=${r.profile} @change=${(e: Event) => this.patchRoom({ profile: (e.target as HTMLSelectElement).value as Room["profile"] })}>${profiles.map(p => html`<option value=${p} ?selected=${r.profile === p}>${this.t(p)}</option>`)}</select></label><p class="help">${this.t(r.profile + "Help")}</p>
+      ${r.area_id ? html`<details class="help-details"><summary>${this.t("suggestions")}</summary><p class="help">${this.t("suggestHelp")}</p>${(this.snapshot!.suggestions?.[r.area_id] ?? []).map(choice => html`<div class="suggestion"><strong>${this.t(choice.profile)}</strong><p class="help">${this.t(choice.reason)}</p><small>${[...choice.entry, ...choice.hold, ...choice.doors].map(id => this.entities.find(e => e.entity_id === id)?.name ?? id).join(" · ")}</small><p><button @click=${() => this.change(c => { c.rooms[r.id] = applySuggestion(r, choice); })}>${this.t("apply")}</button></p></div>`)}</details>` : nothing}</section>
+      <section class="settings-group">${this.condition("entry", r.entry, entry => this.patchRoom({ entry }), false)}${r.profile === "hybrid" ? this.condition("hold", r.hold, hold => this.patchRoom({ hold })) : nothing}</section>
+      ${r.profile === "bee" || r.doors.length > 0 || r.anticipate || r.keep_open ? html`<section class="settings-group"><h3>${this.t("doors")}</h3>${r.doors.map((door, i) => this.condition("entity", door, value => this.patchRoom({ doors: value ? r.doors.map((d, j) => i === j ? value : d) : r.doors.filter((_, j) => j !== i) }), true, true, true))}<button @click=${() => this.patchRoom({ doors: [...r.doors, defaultCondition("state")] })}><ha-icon icon="mdi:plus" aria-hidden="true"></ha-icon>${this.t("addDoor")}</button></section>` : nothing}`;
+  }
+  private roomTiming(r: Room) {
+    return html`<section class="settings-group"><h3>${this.t("confirmationDelays")}</h3><div class="field-grid">${(["on_delay", "off_delay", ...(r.profile === "bee" ? ["open_delay", "close_delay", "latch_max"] : [])] as (keyof Room)[]).map(key => this.number(key, r[key] as number, value => this.patchRoom({ [key]: value })))}</div></section>
+      ${r.profile === "bee" ? html`<section class="settings-group"><h3>${this.t("entryProtection")}</h3>${this.check("require_opening", r.require_opening ?? false, require_opening => this.patchRoom({ require_opening, recovery_delay: r.recovery_delay ?? 120 }))}<p class="help">${this.t("requireOpeningHelp")}</p>
+        ${r.require_opening ? html`<div class="field-grid">${this.number("recovery_delay", r.recovery_delay ?? 120, recovery_delay => this.patchRoom({ recovery_delay }))}</div><details class="help-details"><summary>${this.t("timingHelp")}</summary><p class="help">${this.t("recoveryHelp")}</p><p class="help">${this.t("beeTimingHelp")}</p></details>` : nothing}</section>` : nothing}
+      <section class="settings-group"><h3>${this.t("doorOptions")}</h3>${this.check("anticipate", r.anticipate, anticipate => this.patchRoom({ anticipate }))}${this.check("keep_open", r.keep_open, keep_open => this.patchRoom({ keep_open }))}</section>`;
+  }
+  private roomSettings(r: Room) {
+    return html`<section class="settings-group"><h3>${this.t("roomIdentity")}</h3><div class="field-grid">${this.text("name", r.name, name => this.patchRoom({ name }))}<label>${this.t("area")}<select data-selected=${r.area_id ?? ""} .value=${r.area_id ?? ""} @change=${(e: Event) => this.patchRoom({ area_id: (e.target as HTMLSelectElement).value || null })}><option value="" ?selected=${!r.area_id}>${this.t("noArea")}</option>${this.snapshot!.catalog!.areas.map(a => html`<option value=${a.area_id} ?selected=${r.area_id === a.area_id}>${a.name}</option>`)}</select></label></div><p class="help readout">${this.t("identifier")}: <code>${r.id}</code></p></section>
+      <details class="danger-zone"><summary>${this.t("removeRoom")}</summary><p class="help">${this.t("removeRoomHelp")}</p><button class="danger" @click=${() => { this.change(c => { delete c.rooms[r.id]; }); this.selectedRoom = ""; }}>${this.t("remove")}</button></details>`;
+  }
+  private addResident() { if (!this.valid()) return; const id = createId(); this.change(c => { c.residents[id] = resident(id); }); this.view = "residents"; this.selectedResident = id; }
   private residents() {
     if (!this.config) return nothing;
     const r = this.config.residents[this.selectedResident];
-    return html`<div class="split ${r ? "has-selection" : ""}"><aside class="sidebar">${Object.keys(this.config.residents).map(key => html`<button class=${key === this.selectedResident ? "selected" : ""} @click=${() => this.navigate("residents", key)}>${this.residentName(key)}</button>`)}<button class="link" @click=${() => this.addResident()}>+ ${this.t("addResident")}</button></aside><section class="editor">${r ? html`<button class="mobile-back link" @click=${() => this.navigate("residents")}>← ${this.t("back")}</button><h2>${this.residentName(r.id)}</h2>${this.text("name", r.name, name => this.change(c => { c.residents[r.id].name = name; }))}
+    const keys = Object.keys(this.config.residents).filter(key => this.residentName(key).toLocaleLowerCase().includes(this.residentQuery.toLocaleLowerCase()));
+    return html`<div class="workspace ${r ? "has-selection" : ""}"><aside class="room-rail" aria-label=${this.t("residents")}><div class="rail-heading"><h2 tabindex="-1">${this.t("residents")}</h2><span class="count">${Object.keys(this.config.residents).length}</span></div>
+      <label class="rail-search"><span>${this.t("searchResidents")}</span><input type="search" .value=${this.residentQuery} @input=${(e: Event) => { this.residentQuery = (e.target as HTMLInputElement).value; }}></label>
+      <div class="room-list">${keys.map(key => { const state = this.snapshot!.runtime.residents[key]; return html`<div class="room-item" ?data-active=${key === this.selectedResident}><button class="room-link" aria-label=${this.residentName(key)} aria-current=${key === this.selectedResident ? "page" : nothing} @click=${() => this.navigate("residents", key)}><ha-icon icon="mdi:account-circle-outline" aria-hidden="true"></ha-icon><span><strong>${this.residentName(key)}</strong><small class="room-meta">${this.t(state?.present == null ? "unknown" : state.present ? "present" : "absent")} · ${this.t(state?.sleeping == null ? "unknown" : state.sleeping ? "sleeping" : "awake")}</small></span></button></div>`; })}</div>
+      <button class="link rail-add" @click=${() => this.addResident()}><ha-icon icon="mdi:plus" aria-hidden="true"></ha-icon>${this.t("addResident")}</button></aside><section class="room-detail">${r ? html`${this.detailHeading(this.residentName(r.id), "residents")}<section class="settings-group"><h3>${this.t("residentIdentity")}</h3>${this.text("name", r.name, name => this.change(c => { c.residents[r.id].name = name; }))}
       <hapo-entity-picker .entities=${this.entities} .value=${r.entity_id} .locale=${this.locale} .label=${this.t("personEntity")} required @entity-changed=${(e: CustomEvent) => this.change(c => { c.residents[r.id].entity_id = e.detail.value ?? ""; })}></hapo-entity-picker>
       ${this.text("homeStates", r.home_states.join(", "), value => this.change(c => { c.residents[r.id].home_states = value.split(",").map(s => s.trim()).filter(Boolean); }), true, true)}${this.number("presenceDelay", r.presence_delay, value => this.change(c => { c.residents[r.id].presence_delay = value; }))}
       ${this.condition("sleepSource", r.sleep_source, value => this.change(c => { c.residents[r.id].sleep_source = value; }), true, true)}<p class="hint">${this.t("sleepHelp")}</p><details><summary>${this.t("details")}</summary><p class="readout">${this.t("identifier")}: <code>${r.id}</code></p></details>
-      ${this.snapshot!.runtime.residents[r.id] ? html`<div class="actions"><button @click=${() => this.command("sleep", r.id, "sleeping")}>${this.t("sleep")}</button><button @click=${() => this.command("sleep", r.id, "awake")}>${this.t("wake")}</button><button @click=${() => this.command("sleep", r.id, "auto")}>${this.t("resetSleep")}</button></div>` : nothing}<div class="section"><button class="danger link" @click=${() => { this.change(c => { delete c.residents[r.id]; }); this.selectedResident = ""; }}>${this.t("remove")}</button></div>` : html`<div class="empty"><p>${this.t("emptyResidents")}</p><button @click=${() => this.addResident()}>${this.t("addResident")}</button></div>`}</section></div>`;
+      </section>${this.snapshot!.runtime.residents[r.id] ? html`<div class="actions"><button @click=${() => this.command("sleep", r.id, "sleeping")}>${this.t("sleep")}</button><button @click=${() => this.command("sleep", r.id, "awake")}>${this.t("wake")}</button><button @click=${() => this.command("sleep", r.id, "auto")}>${this.t("resetSleep")}</button></div>` : nothing}<div class="section"><button class="danger link" @click=${() => { this.change(c => { delete c.residents[r.id]; }); this.selectedResident = ""; }}>${this.t("remove")}</button></div>` : html`<div class="empty"><p>${this.t("emptyResidents")}</p><button @click=${() => this.addResident()}>${this.t("addResident")}</button></div>`}</section></div>`;
   }
   private home() {
     if (!this.config) return nothing;
     const home = this.config.home;
-    return html`<section class="editor"><h2>${this.t("home")}</h2><label>${this.t("homeSource")}<select data-selected=${home.source} .value=${home.source} @change=${(e: Event) => this.change(c => { c.home.source = (e.target as HTMLSelectElement).value as Config["home"]["source"]; })}>${[["residents", "residentSource"], ["entity", "entitySource"], ["rooms", "roomSource"]].map(([value, label]) => html`<option value=${value} ?selected=${home.source === value}>${this.t(label)}</option>`)}</select></label><p class="hint">${this.t("sourceHelp")}</p>
+    return html`<div class="global-settings"><div class="section-heading"><h2 class="view-title" tabindex="-1">${this.t("globalSettings")}</h2></div>${this.homeSummary()}<section class="settings-group"><h3>${this.t("homeSource")}</h3><label>${this.t("homeSource")}<select data-selected=${home.source} .value=${home.source} @change=${(e: Event) => this.change(c => { c.home.source = (e.target as HTMLSelectElement).value as Config["home"]["source"]; })}>${[["residents", "residentSource"], ["entity", "entitySource"], ["rooms", "roomSource"]].map(([value, label]) => html`<option value=${value} ?selected=${home.source === value}>${this.t(label)}</option>`)}</select></label><p class="hint">${this.t("sourceHelp")}</p>
       ${home.source === "entity" ? this.condition("entity", home.entity, value => this.change(c => { c.home.entity = value; }), false, true) : home.source === "rooms" ? html`${Object.keys(this.config.rooms).map(key => this.check(this.roomName(key), home.rooms.includes(key), enabled => this.change(c => { c.home.rooms = enabled ? [...c.home.rooms, key] : c.home.rooms.filter(r => r !== key); })))}` : nothing}
       ${this.number("failureGrace", this.config.failure_grace, value => this.change(c => { c.failure_grace = value; }))}
-      <h3>${this.t("mode")}</h3><p class="hint">${this.t("modeHelp")}</p>${home.modes.map((mode, index) => html`<div class="mode-card"><div class="toolbar"><strong>${mode.name || this.t(mode.id)}</strong><div class="actions"><button aria-label=${this.t("up")} ?disabled=${index === 0} @click=${() => this.moveMode(index, -1)}>↑</button><button aria-label=${this.t("down")} ?disabled=${index === home.modes.length - 1} @click=${() => this.moveMode(index, 1)}>↓</button><button class="danger link" ?disabled=${home.modes.length === 1} @click=${() => this.change(c => { c.home.modes.splice(index, 1); })}>${this.t("remove")}</button></div></div><div class="fields"><label>${this.t("modeKey")}<input required pattern="[a-z0-9][a-z0-9_-]{0,63}" .value=${mode.id} ?readonly=${this.snapshot!.config!.home.modes.some(m => m.id === mode.id)} @change=${(e: Event) => this.change(c => { c.home.modes[index].id = (e.target as HTMLInputElement).value; })}></label>${this.text("modeName", mode.name, value => this.change(c => { c.home.modes[index].name = value; }))}</div>${this.condition("condition", mode.condition, value => this.change(c => { c.home.modes[index].condition = value!; }), false)}</div>`)}
+      </section><section class="settings-group"><h3>${this.t("mode")}</h3><p class="hint">${this.t("modeHelp")}</p>${home.modes.map((mode, index) => html`<div class="mode-card"><div class="toolbar"><strong>${mode.name || this.t(mode.id)}</strong><div class="actions"><button aria-label=${this.t("up")} ?disabled=${index === 0} @click=${() => this.moveMode(index, -1)}>↑</button><button aria-label=${this.t("down")} ?disabled=${index === home.modes.length - 1} @click=${() => this.moveMode(index, 1)}>↓</button><button class="danger link" ?disabled=${home.modes.length === 1} @click=${() => this.change(c => { c.home.modes.splice(index, 1); })}>${this.t("remove")}</button></div></div><div class="fields"><label>${this.t("modeKey")}<input required pattern="[a-z0-9][a-z0-9_-]{0,63}" .value=${mode.id} ?readonly=${this.snapshot!.config!.home.modes.some(m => m.id === mode.id)} @change=${(e: Event) => this.change(c => { c.home.modes[index].id = (e.target as HTMLInputElement).value; })}></label>${this.text("modeName", mode.name, value => this.change(c => { c.home.modes[index].name = value; }))}</div>${this.condition("condition", mode.condition, value => this.change(c => { c.home.modes[index].condition = value!; }), false)}</div>`)}
       <button class="section" @click=${() => this.change(c => { c.home.modes.push({ id: "mode_" + createId().slice(0, 8), name: "", condition: defaultCondition("state") }); })}>+ ${this.t("addMode")}</button>
-      <details><summary>${this.t("manual_override")}</summary>${this.number("duration", this.overrideMinutes, value => { this.overrideMinutes = value; }, 10080)}<label>${this.t("mode")}<select data-selected=${this.selectedMode} .value=${this.selectedMode} @change=${(e: Event) => { this.selectedMode = (e.target as HTMLSelectElement).value; }}><option value="auto" ?selected=${this.selectedMode === "auto"}>${this.t("auto")}</option>${this.snapshot!.config!.home.modes.map(mode => html`<option value=${mode.id} ?selected=${this.selectedMode === mode.id}>${mode.name || this.t(mode.id)}</option>`)}</select></label><button @click=${() => this.command("home_override", "", this.selectedMode, this.overrideMinutes * 60)}>${this.t("forceMode")}</button></details>
+      </section><details><summary>${this.t("manual_override")}</summary>${this.number("duration", this.overrideMinutes, value => { this.overrideMinutes = value; }, 10080)}<label>${this.t("mode")}<select data-selected=${this.selectedMode} .value=${this.selectedMode} @change=${(e: Event) => { this.selectedMode = (e.target as HTMLSelectElement).value; }}><option value="auto" ?selected=${this.selectedMode === "auto"}>${this.t("auto")}</option>${this.snapshot!.config!.home.modes.map(mode => html`<option value=${mode.id} ?selected=${this.selectedMode === mode.id}>${mode.name || this.t(mode.id)}</option>`)}</select></label><button @click=${() => this.command("home_override", "", this.selectedMode, this.overrideMinutes * 60)}>${this.t("forceMode")}</button></details>
       <details><summary>${this.t("transfer")}</summary><p class="hint">${this.t("importHelp")}</p><div class="actions"><button @click=${() => this.download()}>${this.t("export")}</button><label>${this.t("import")}<input type="file" accept="application/json,.json" @change=${(e: Event) => this.importFile(e)}></label></div></details>
-    </section>`;
+    <details class="section"><summary>${this.t("about")}</summary><p><strong>Hapo</strong> — Home Assistant Presence Orchestrator</p></details></div>`;
   }
   private moveMode(index: number, direction: number) { this.change(c => { const [mode] = c.home.modes.splice(index, 1); c.home.modes.splice(index + direction, 0, mode); }); }
 }

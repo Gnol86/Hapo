@@ -7,7 +7,16 @@ import "./entity-picker";
 
 export class HapoCondition extends LitElement {
   static properties = { value: { attribute: false }, entities: { attribute: false }, config: { attribute: false }, locale: {}, label: {}, optional: { type: Boolean }, externalOnly: { type: Boolean }, stateOnly: { type: Boolean } };
-  static styles = [controls, css`:host{display:block;margin:8px 0}.condition{border-left:2px solid var(--divider-color,#ddd);padding:4px 0 4px 14px}.top{display:flex;gap:8px;align-items:end}.top label{flex:1}.child{margin:10px 0}.sub{font-size:12px}.title{font-size:14px;font-weight:500;margin:14px 0 6px}`];
+  static styles = [controls, css`
+    :host { display: block; min-width: 0; margin: 8px 0; color-scheme: inherit; }
+    .condition { min-width: 0; padding: 12px; margin: 12px 0; border: 1px solid var(--hapo-line); border-radius: var(--hapo-control-radius); background: var(--hapo-surface); }
+    .top { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; }
+    .top label { flex: 1; min-width: min(100%,180px); }
+    .top button { margin-bottom: 8px; }
+    .child { margin: 10px 0; }
+    .sub { font-size: var(--ha-font-size-s,12px); color: var(--hapo-secondary); }
+    .title { font-size: var(--ha-font-size-m,14px); font-weight: var(--ha-font-weight-medium,500); margin: 14px 0 6px; }
+  `];
   value: Condition | null = null;
   entities: EntityOption[] = [];
   config?: Config;

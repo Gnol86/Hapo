@@ -5,7 +5,12 @@ from homeassistant.core import CoreState
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.hapo.models import default_config, default_resident, default_room
+from custom_components.hapo.models import (
+    default_config,
+    default_resident,
+    default_room,
+    validate_config,
+)
 
 
 @pytest.fixture
@@ -39,6 +44,151 @@ async def configure(hass, entry):
     hass.states.async_set("person.alice", "home")
     await entry.runtime_data.async_save(c, 0)
     await hass.async_block_till_done()
+
+
+def test_legacy_room_config_defaults_to_unrestricted_entry_without_mutation():
+    config = default_config()
+    room = default_room("office") | {"enabled": False}
+    del room["require_opening"]
+    del room["recovery_delay"]
+    config["rooms"]["office"] = room
+
+    validated = validate_config(config)
+
+    assert validated["rooms"]["office"]["require_opening"] is False
+    assert validated["rooms"]["office"]["recovery_delay"] == 120
+    assert "require_opening" not in config["rooms"]["office"]
+    assert "recovery_delay" not in config["rooms"]["office"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("require_opening", "true", "invalid_boolean"),
+        ("require_opening", 1, "invalid_boolean"),
+        ("recovery_delay", True, "invalid_duration"),
+        ("recovery_delay", "120", "invalid_duration"),
+        ("recovery_delay", -1, "invalid_duration"),
+        ("recovery_delay", float("nan"), "invalid_duration"),
+        ("recovery_delay", float("inf"), "invalid_duration"),
+        ("recovery_delay", 604801, "invalid_duration"),
+    ],
+)
+def test_room_opening_options_validate_values(field, value, error):
+    config = default_config()
+    config["rooms"]["office"] = default_room("office") | {
+        "enabled": False,
+        field: value,
+    }
+
+    with pytest.raises(ValueError, match=f"^{error}$"):
+        validate_config(config)
+
+
+async def test_opening_options_are_saved_per_room_and_survive_reload(hass, integration):
+    from copy import deepcopy
+
+    await configure(hass, integration)
+    manager = integration.runtime_data
+    config = deepcopy(manager.config)
+    config["rooms"]["garden"] = default_room("garden") | {
+        "profile": "bee",
+        "entry": {
+            "type": "state",
+            "entity_id": "binary_sensor.garden_motion",
+            "states": ["on"],
+        },
+        "doors": [
+            {
+                "type": "state",
+                "entity_id": "binary_sensor.garden_door",
+                "states": ["on"],
+            }
+        ],
+        "require_opening": True,
+        "recovery_delay": 45,
+        "off_delay": 0,
+    }
+    hass.states.async_set("binary_sensor.garden_motion", "off")
+    hass.states.async_set("binary_sensor.garden_door", "off")
+    await manager.async_save(config, manager.revision)
+    hass.states.async_set("binary_sensor.garden_door", "on")
+    await hass.async_block_till_done()
+    hass.states.async_set("binary_sensor.garden_door", "off")
+    await hass.async_block_till_done()
+    assert manager.engine.rooms["garden"].recovery_until is not None
+    await hass.config_entries.async_reload(integration.entry_id)
+    await hass.async_block_till_done()
+    manager = integration.runtime_data
+
+    assert manager.config["rooms"]["garden"]["require_opening"] is True
+    assert manager.config["rooms"]["garden"]["recovery_delay"] == 45
+    assert manager.config["rooms"]["office"]["require_opening"] is False
+    assert manager.config["rooms"]["office"]["recovery_delay"] == 120
+    assert manager.engine.rooms["garden"].recovery_until is None
+    assert not manager.engine.rooms["garden"].opening_armed
+    hass.states.async_set("binary_sensor.garden_motion", "on")
+    await hass.async_block_till_done()
+    assert hass.states.get("binary_sensor.hapo_garden_presence").state == "off"
+
+
+@pytest.mark.parametrize("change", ["rename", "other_room"])
+async def test_save_preserves_bee_recovery_deadline_and_expires_on_timer(
+    hass, integration, freezer, change
+):
+    from copy import deepcopy
+    from datetime import timedelta
+
+    from homeassistant.util import dt as dt_util
+    from pytest_homeassistant_custom_component.common import async_fire_time_changed
+
+    async def advance(seconds):
+        freezer.tick(timedelta(seconds=seconds))
+        async_fire_time_changed(hass, dt_util.utcnow())
+        await hass.async_block_till_done()
+
+    await configure(hass, integration)
+    manager = integration.runtime_data
+    config = deepcopy(manager.config)
+    config["rooms"]["office"].update(
+        profile="bee",
+        doors=[{"type": "state", "entity_id": "binary_sensor.door", "states": ["on"]}],
+        require_opening=True,
+        close_delay=20,
+        recovery_delay=120,
+    )
+    hass.states.async_set("binary_sensor.motion", "off")
+    hass.states.async_set("binary_sensor.door", "off")
+    await manager.async_save(config, manager.revision)
+    hass.states.async_set("binary_sensor.door", "on")
+    await hass.async_block_till_done()
+    hass.states.async_set("binary_sensor.door", "off")
+    await hass.async_block_till_done()
+
+    deadline = manager.engine.rooms["office"].recovery_until
+    assert deadline == dt_util.utcnow().timestamp() + 140
+    assert manager.engine.rooms["office"].opening_armed
+    state = hass.states.get("binary_sensor.hapo_office_presence")
+    assert state.attributes["recovery_until"] == deadline
+    await advance(10)
+    config = deepcopy(manager.config)
+    if change == "rename":
+        config["rooms"]["office"]["name"] = "Personal office"
+    else:
+        config["rooms"]["other"] = default_room("other") | {"enabled": False}
+    await manager.async_save(config, manager.revision)
+
+    assert manager.engine.rooms["office"].recovery_until == deadline
+    assert manager.engine.rooms["office"].opening_armed
+    await advance(131)
+    state = hass.states.get("binary_sensor.hapo_office_presence")
+    assert state.state == "off"
+    assert state.attributes["reason"] == "waiting_for_opening"
+    assert "recovery_until" not in state.attributes
+    assert not manager.engine.rooms["office"].opening_armed
+    hass.states.async_set("binary_sensor.motion", "on")
+    await hass.async_block_till_done()
+    assert hass.states.get("binary_sensor.hapo_office_presence").state == "off"
 
 
 async def test_entities_commands_and_reload(hass, integration):

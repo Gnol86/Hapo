@@ -19,6 +19,14 @@ REASONS = {
     "door_stabilizing": ("door closing confirmation", "confirmation après fermeture"),
     "door_open": ("open door", "porte ouverte"),
     "door_anticipation": ("door opening anticipation", "anticipation à l’ouverture"),
+    "waiting_for_opening": (
+        "waiting for a door opening before accepting presence",
+        "en attente d’une ouverture avant d’accepter une présence",
+    ),
+    "entry_recovery": (
+        "waiting for presence confirmation after door closing",
+        "en attente d’une confirmation de présence après fermeture",
+    ),
     "context_maintained": ("maintained by context", "maintenue par le contexte"),
     "context_blocked": (
         "context no longer permits presence",
