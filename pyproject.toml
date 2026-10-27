@@ -1,6 +1,6 @@
 [project]
 name = "hapo-homeassistant"
-version = "0.2.0"
+version = "0.2.1"
 description = "Local presence orchestration for Home Assistant."
 requires-python = ">=3.14.2,<3.15"
 

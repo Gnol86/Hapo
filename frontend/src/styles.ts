@@ -46,6 +46,7 @@ export const controls = css`
   button.danger,.danger { color: var(--error-color,var(--hapo-text)); }
   label { display: flex; flex-direction: column; gap: 6px; font-size: var(--ha-font-size-m,14px); margin: 8px 0; min-width: 0; }
   label.check { flex-direction: row; align-items: center; gap: 10px; min-height: 32px; cursor: pointer; }
+  label.check:has(input:disabled) { color: var(--disabled-text-color,var(--hapo-secondary)); cursor: default; }
   .fields,.field-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,200px),1fr)); gap: var(--ha-space-2,8px) var(--ha-space-4,16px); }
   .field-grid > label:not(.check),.field-grid > hapo-entity-picker { display: grid; grid-row: span 2; grid-template-rows: subgrid; row-gap: 6px; align-items: start; }
   .field-grid > hapo-entity-picker::part(control) { margin-top: 0; }

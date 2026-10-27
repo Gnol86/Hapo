@@ -1,7 +1,7 @@
 {
   "name": "hapo-panel",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "scripts": {
     "build": "esbuild frontend/src/hapo-panel.ts --bundle --minify --format=esm --target=es2022 --legal-comments=eof --outfile=custom_components/hapo/frontend/hapo-panel.js",

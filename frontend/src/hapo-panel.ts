@@ -84,7 +84,16 @@ export class HapoPanel extends LitElement {
     if (!this.draft) { this.baseRevision = this.snapshot!.revision; this.draft = structuredClone(this.config); }
     update(this.draft); this.rememberDraft(); this.error = ""; this.message = ""; this.requestUpdate();
   }
-  private patchRoom(change: Partial<Room>) { this.change(c => Object.assign(c.rooms[this.selectedRoom], change)); }
+  private hasConfiguredDoor(r: Room) {
+    return r.doors.some(d => d.type === "state" && /^[a-z0-9_]+\.[a-z0-9_]+$/.test(d.entity_id ?? "")
+      && d.states?.length && d.states.every(state => state.trim() && !["unknown", "unavailable"].includes(state)));
+  }
+  private patchRoom(change: Partial<Room>) {
+    this.change(c => {
+      const r = Object.assign(c.rooms[this.selectedRoom], change);
+      if (change.doors && !this.hasConfiguredDoor(r)) r.anticipate = r.keep_open = r.require_opening = false;
+    });
+  }
   private valid(): boolean {
     let valid = true;
     for (const input of this.renderRoot.querySelectorAll<HTMLInputElement | HTMLSelectElement | HapoCondition>("input,select,hapo-condition,hapo-entity-picker")) {
@@ -115,6 +124,13 @@ export class HapoPanel extends LitElement {
   }
   private async save() {
     if (!this.hass || !this.draft || !this.valid() || this.saving) return;
+    const missingDoors = Object.values(this.draft.rooms).find(r => !this.hasConfiguredDoor(r)
+      && (r.anticipate || r.keep_open || (r.profile === "bee" && r.require_opening)));
+    if (missingDoors) {
+      this.view = "rooms"; this.selectedRoom = missingDoors.id; this.roomSection = "detection";
+      this.error = `${this.roomName(missingDoors.id)} : ${this.t("doorOptionsHelp")}`;
+      return;
+    }
     this.saving = true; this.error = "";
     try {
       const result = await this.hass.callWS<Snapshot>({ type: "hapo/save", config: this.draft, revision: this.baseRevision });
@@ -135,7 +151,7 @@ export class HapoPanel extends LitElement {
   private residentName(key: string) { const r = this.config?.residents[key]; return r?.name || this.entities.find(e => e.entity_id === r?.entity_id)?.name || this.snapshot?.names.residents[key] || key; }
   private text(label: string, value: string, update: (v: string) => void, required = false, onChange = false) { return html`<label>${this.t(label)}<input .value=${value} ?required=${required} @input=${(e: Event) => { if (!onChange) update((e.target as HTMLInputElement).value); }} @change=${(e: Event) => { if (onChange) update((e.target as HTMLInputElement).value); }}></label>`; }
   private number(label: string, value: number, update: (v: number) => void, max = 604800) { return html`<label>${this.t(label)}<input type="number" min="0" max=${max} step="1" required .value=${String(value)} @input=${(e: Event) => { const field = e.target as HTMLInputElement; if (field.validity.valid) update(field.valueAsNumber); }}></label>`; }
-  private check(label: string, value: boolean, update: (v: boolean) => void) { return html`<label class="check"><input type="checkbox" .checked=${value} @change=${(e: Event) => update((e.target as HTMLInputElement).checked)}>${this.t(label)}</label>`; }
+  private check(label: string, value: boolean, update: (v: boolean) => void, disabled = false, describedBy?: string) { return html`<label class="check"><input type="checkbox" .checked=${value} ?disabled=${disabled} aria-describedby=${describedBy ?? nothing} @change=${(e: Event) => { if (!disabled) update((e.target as HTMLInputElement).checked); }}>${this.t(label)}</label>`; }
   private condition(label: string, value: Condition | null, update: (v: Condition | null) => void, optional = true, externalOnly = false, stateOnly = false) { return html`<hapo-condition .label=${this.t(label)} .value=${value} .config=${this.config} .entities=${this.entities} .locale=${this.locale} .optional=${optional} .externalOnly=${externalOnly} .stateOnly=${stateOnly} @condition-changed=${(e: CustomEvent) => { e.stopPropagation(); update(e.detail.value); }}></hapo-condition>`; }
   private download() {
     if (!this.config) return;
@@ -255,15 +271,18 @@ export class HapoPanel extends LitElement {
   }
   private roomDetection(r: Room) {
     return html`<section class="settings-group"><h3>${this.t("profile")}</h3><label>${this.t("profile")}<select data-selected=${r.profile} .value=${r.profile} @change=${(e: Event) => this.patchRoom({ profile: (e.target as HTMLSelectElement).value as Room["profile"] })}>${profiles.map(p => html`<option value=${p} ?selected=${r.profile === p}>${this.t(p)}</option>`)}</select></label><p class="help">${this.t(r.profile + "Help")}</p>
-      ${r.area_id ? html`<details class="help-details"><summary>${this.t("suggestions")}</summary><p class="help">${this.t("suggestHelp")}</p>${(this.snapshot!.suggestions?.[r.area_id] ?? []).map(choice => html`<div class="suggestion"><strong>${this.t(choice.profile)}</strong><p class="help">${this.t(choice.reason)}</p><small>${[...choice.entry, ...choice.hold, ...choice.doors].map(id => this.entities.find(e => e.entity_id === id)?.name ?? id).join(" · ")}</small><p><button @click=${() => this.change(c => { c.rooms[r.id] = applySuggestion(r, choice); })}>${this.t("apply")}</button></p></div>`)}</details>` : nothing}</section>
+      ${r.area_id ? html`<details class="help-details"><summary>${this.t("suggestions")}</summary><p class="help">${this.t("suggestHelp")}</p>${(this.snapshot!.suggestions?.[r.area_id] ?? []).map(choice => html`<div class="suggestion"><strong>${this.t(choice.profile)}</strong><p class="help">${this.t(choice.reason)}</p><small>${[...choice.entry, ...choice.hold, ...choice.doors].map(id => this.entities.find(e => e.entity_id === id)?.name ?? id).join(" · ")}</small><p><button @click=${() => this.patchRoom(applySuggestion(r, choice))}>${this.t("apply")}</button></p></div>`)}</details>` : nothing}</section>
       <section class="settings-group">${this.condition("entry", r.entry, entry => this.patchRoom({ entry }), false)}${r.profile === "hybrid" ? this.condition("hold", r.hold, hold => this.patchRoom({ hold })) : nothing}</section>
-      ${r.profile === "bee" || r.doors.length > 0 || r.anticipate || r.keep_open ? html`<section class="settings-group"><h3>${this.t("doors")}</h3>${r.doors.map((door, i) => this.condition("entity", door, value => this.patchRoom({ doors: value ? r.doors.map((d, j) => i === j ? value : d) : r.doors.filter((_, j) => j !== i) }), true, true, true))}<button @click=${() => this.patchRoom({ doors: [...r.doors, defaultCondition("state")] })}><ha-icon icon="mdi:plus" aria-hidden="true"></ha-icon>${this.t("addDoor")}</button></section>` : nothing}`;
+      <section class="settings-group"><h3>${this.t("doors")}</h3><p class="help">${this.t("doorsHelp")}</p>${r.doors.map((door, i) => this.condition("entity", door, value => this.patchRoom({ doors: value ? r.doors.map((d, j) => i === j ? value : d) : r.doors.filter((_, j) => j !== i) }), true, true, true))}<button @click=${() => this.patchRoom({ doors: [...r.doors, defaultCondition("state")] })}><ha-icon icon="mdi:plus" aria-hidden="true"></ha-icon>${this.t("addDoor")}</button></section>`;
   }
   private roomTiming(r: Room) {
+    const hasDoor = this.hasConfiguredDoor(r);
     return html`<section class="settings-group"><h3>${this.t("confirmationDelays")}</h3><div class="field-grid">${(["on_delay", "off_delay", ...(r.profile === "bee" ? ["open_delay", "close_delay", "latch_max"] : [])] as (keyof Room)[]).map(key => this.number(key, r[key] as number, value => this.patchRoom({ [key]: value })))}</div></section>
-      ${r.profile === "bee" ? html`<section class="settings-group"><h3>${this.t("entryProtection")}</h3>${this.check("require_opening", r.require_opening ?? false, require_opening => this.patchRoom({ require_opening, recovery_delay: r.recovery_delay ?? 120 }))}<p class="help">${this.t("requireOpeningHelp")}</p>
+      ${r.profile === "bee" ? html`<section class="settings-group"><h3>${this.t("entryProtection")}</h3>${this.check("require_opening", r.require_opening ?? false, require_opening => this.patchRoom({ require_opening, recovery_delay: r.recovery_delay ?? 120 }), !hasDoor && !r.require_opening, !hasDoor ? "door-options-help" : undefined)}<p class="help">${this.t("requireOpeningHelp")}</p>
         ${r.require_opening ? html`<div class="field-grid">${this.number("recovery_delay", r.recovery_delay ?? 120, recovery_delay => this.patchRoom({ recovery_delay }))}</div><details class="help-details"><summary>${this.t("timingHelp")}</summary><p class="help">${this.t("recoveryHelp")}</p><p class="help">${this.t("beeTimingHelp")}</p></details>` : nothing}</section>` : nothing}
-      <section class="settings-group"><h3>${this.t("doorOptions")}</h3>${this.check("anticipate", r.anticipate, anticipate => this.patchRoom({ anticipate }))}${this.check("keep_open", r.keep_open, keep_open => this.patchRoom({ keep_open }))}</section>`;
+      <section class="settings-group"><h3>${this.t("doorOptions")}</h3>
+        ${!hasDoor ? html`<p class="help" id="door-options-help">${this.t("doorOptionsHelp")}</p><button class="link" @click=${() => this.selectRoomSection("detection")}>${this.t("configureDoors")}</button>` : nothing}
+        ${this.check("anticipate", r.anticipate, anticipate => this.patchRoom({ anticipate }), !hasDoor && !r.anticipate, !hasDoor ? "door-options-help" : undefined)}${this.check("keep_open", r.keep_open, keep_open => this.patchRoom({ keep_open }), !hasDoor && !r.keep_open, !hasDoor ? "door-options-help" : undefined)}</section>`;
   }
   private roomSettings(r: Room) {
     return html`<section class="settings-group"><h3>${this.t("roomIdentity")}</h3><div class="field-grid">${this.text("name", r.name, name => this.patchRoom({ name }))}<label>${this.t("area")}<select data-selected=${r.area_id ?? ""} .value=${r.area_id ?? ""} @change=${(e: Event) => this.patchRoom({ area_id: (e.target as HTMLSelectElement).value || null })}><option value="" ?selected=${!r.area_id}>${this.t("noArea")}</option>${this.snapshot!.catalog!.areas.map(a => html`<option value=${a.area_id} ?selected=${r.area_id === a.area_id}>${a.name}</option>`)}</select></label></div><p class="help readout">${this.t("identifier")}: <code>${r.id}</code></p></section>

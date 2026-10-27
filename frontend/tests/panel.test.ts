@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { Window } from 'happy-dom';
 import type { Config, Hass, Snapshot } from '../src/types';
+import type { HapoCondition } from '../src/condition-editor';
 import { room, stateCondition } from '../src/model';
 
 const browser = new Window({ url: 'http://localhost:8123' });
@@ -105,6 +106,70 @@ function beeFixture() {
   const data=fixture(); data.config!.rooms.office.profile='bee'; data.config!.rooms.office.doors=[stateCondition('binary_sensor.door')];
   return data;
 }
+
+const doorOptionLabels=['Anticiper la présence à l’ouverture d’une porte','Maintenir la présence tant qu’un passage surveillé est ouvert'];
+function doorEditor(p: Panel) { return [...p.shadowRoot!.querySelectorAll<HapoCondition>('hapo-condition')].find(c=>c.stateOnly)!; }
+async function removeDoor(p: Panel) {
+  const remove=[...doorEditor(p).shadowRoot!.querySelectorAll('button')].find(b=>b.textContent?.trim()==='Supprimer');
+  assert.ok(remove); remove.click(); await settle(p);
+}
+
+test('motion door options require a configured door and are cleared when the last door is removed',async()=>{
+  const {p,calls}=await mount(); await openRoom(p,'My Office','Détection');
+  assert.ok(button(p,'Ajouter une porte')); assert.equal(p.draft,undefined);
+  await roomTab(p,'Délais');
+  for (const label of doorOptionLabels) { const input=namedInput(p,label); assert.equal(input.disabled,true); input.click(); }
+  assert.equal(p.draft,undefined);
+  assert.match(p.shadowRoot!.querySelector('#door-options-help')!.textContent!,/Configure au moins une porte/);
+  button(p,'Configurer les portes surveillées').click(); await settle(p);
+  button(p,'Ajouter une porte').click(); await settle(p);
+  await roomTab(p,'Délais');
+  assert.equal(button(p,'Détection').getAttribute('aria-selected'),'true');
+  button(p,'Enregistrer').click(); await settle(p);
+  assert.equal(calls.filter(c=>c.type==='hapo/save').length,0);
+  const picker=doorEditor(p).shadowRoot!.querySelector('hapo-entity-picker')!;
+  picker.shadowRoot!.querySelector('input')!.focus(); await settle(p);
+  const option=[...picker.shadowRoot!.querySelectorAll<HTMLElement>('[role=option]')].find(e=>e.textContent?.includes('binary_sensor.door'))!;
+  option.click(); await settle(p); await roomTab(p,'Délais');
+  for (const label of doorOptionLabels) { const input=namedInput(p,label); assert.equal(input.disabled,false); input.click(); await settle(p); }
+  button(p,'Enregistrer').click(); await settle(p);
+  const saved=calls.find(c=>c.type==='hapo/save')!.config as Config;
+  assert.deepEqual(saved.rooms.office.doors,[stateCondition('binary_sensor.door')]);
+  assert.equal(saved.rooms.office.anticipate,true); assert.equal(saved.rooms.office.keep_open,true);
+  await roomTab(p,'Détection'); await removeDoor(p); await roomTab(p,'Délais');
+  for (const label of doorOptionLabels) { assert.equal(namedInput(p,label).disabled,true); assert.equal(namedInput(p,label).checked,false); }
+  button(p,'Enregistrer').click(); await settle(p);
+  const cleared=calls.filter(c=>c.type==='hapo/save').at(-1)!.config as Config;
+  assert.deepEqual(cleared.rooms.office.doors,[]); assert.equal(cleared.rooms.office.anticipate,false); assert.equal(cleared.rooms.office.keep_open,false);
+});
+
+test('door options survive removal of one passage but not a suggestion that removes every door',async()=>{
+  const data=beeFixture(); Object.assign(data.config!.rooms.office,{anticipate:true,keep_open:true,require_opening:true});
+  data.config!.rooms.office.doors.push(stateCondition('binary_sensor.second_door'));
+  data.suggestions!.office=[{profile:'motion',reason:'motion_available',entry:['binary_sensor.motion'],hold:[],doors:[]}];
+  const {p,calls}=await mount(data); await openRoom(p,'My Office','Détection'); await removeDoor(p);
+  assert.equal(p.draft!.rooms.office.anticipate,true); assert.equal(p.draft!.rooms.office.keep_open,true); assert.equal(p.draft!.rooms.office.require_opening,true);
+  button(p,'Utiliser cette suggestion').click(); await settle(p); button(p,'Enregistrer').click(); await settle(p);
+  const saved=calls.find(c=>c.type==='hapo/save')!.config as Config;
+  assert.equal(saved.rooms.office.profile,'motion'); assert.deepEqual(saved.rooms.office.doors,[]);
+  assert.equal(saved.rooms.office.anticipate,false); assert.equal(saved.rooms.office.keep_open,false); assert.equal(saved.rooms.office.require_opening,false);
+});
+
+test('legacy options without doors cannot be saved unchanged and can still be switched off',async()=>{
+  const data=fixture(); Object.assign(data.config!.rooms.office,{anticipate:true,keep_open:true});
+  const {p,calls}=await mount(data); await openRoom(p,'My Office','Réglages'); enter(namedInput(p,'Nom'),'Office'); await settle(p);
+  button(p,'Enregistrer').click(); await settle(p);
+  assert.equal(calls.filter(c=>c.type==='hapo/save').length,0);
+  assert.equal(button(p,'Détection').getAttribute('aria-selected'),'true');
+  assert.match(p.shadowRoot!.querySelector('[role=alert]')!.textContent!,/Office : Configure au moins une porte/);
+  await roomTab(p,'Délais');
+  for (const label of doorOptionLabels) {
+    const input=namedInput(p,label); assert.equal(input.disabled,false); input.click(); await settle(p);
+    assert.equal(namedInput(p,label).disabled,true); assert.equal(namedInput(p,label).checked,false);
+  }
+  button(p,'Enregistrer').click(); await settle(p);
+  assert.equal(calls.filter(c=>c.type==='hapo/save').length,1);
+});
 
 test('Bee opening controls are opt-in and save the recovery period separately for each room',async()=>{
   const data=beeFixture(); data.config!.rooms.garden={...room('garden'),name:'Garden',profile:'bee',entry:stateCondition('binary_sensor.motion'),doors:[stateCondition('binary_sensor.door')],require_opening:true,recovery_delay:45};
